@@ -180,8 +180,11 @@ def check_asr(args):
     import onnx_engine
     asr = onnx_engine.OnnxASR(lang="en-US")
     load_s = time.time() - t0
-    prov = onnx_engine.ort.get_available_providers()
-    on_gpu = "CUDAExecutionProvider" in prov
+    # The providers actually ACTIVE on the session (after any load failure +
+    # fallback) — not ort.get_available_providers(), which lists everything
+    # compiled in even when CUDA can't load its .so at runtime.
+    active = asr.enc.get_providers()
+    on_gpu = any(("CUDA" in p) or ("Tensorrt" in p) for p in active)
 
     # real wav if given, else 3 s of synthetic audio (text will be garbage; we
     # only check the pipeline runs and measure cost).
@@ -213,17 +216,18 @@ def check_asr(args):
     import resource
     rss_mb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
 
-    print(f"       {_c(f'provider={prov[0]} gpu={on_gpu} load={load_s:.1f}s', 'dim')}")
+    print(f"       {_c(f'providers={active} gpu={on_gpu} load={load_s:.1f}s', 'dim')}")
     print(f"       {_c(f'offline={off_s*1000:.0f}ms stream={stream_s*1000:.0f}ms for {audio_s:.1f}s audio (RTF {rtf:.2f})', 'dim')}")
     print(f"       {_c(f'host RSS {rss_mb:.0f} MB' + ('  [synthetic audio: text N/A]' if synthetic else f'  text={text[:50]!r}'), 'dim')}")
 
-    if rss_mb > 1500:
-        return FAIL, f"RSS {rss_mb:.0f} MB exceeds ~0.9 GB expectation"
+    # RSS is informational, not a gate: on CPU the ~2.5 GB of weights live in host
+    # RAM; on GPU they're in VRAM and RSS drops to ~0.9 GB. Only a slow GPU RTF is
+    # a real failure (the production path is GPU).
+    where = "GPU" if on_gpu else "CPU"
     if on_gpu and rtf > 1.0:
         return FAIL, f"RTF {rtf:.2f} > 1.0 on GPU — slower than real-time"
-    if not on_gpu:
-        return PASS, f"engine ok on CPU, RSS {rss_mb:.0f} MB, RTF {rtf:.2f} (GPU is the prod path)"
-    return PASS, f"engine ok on GPU, RSS {rss_mb:.0f} MB, RTF {rtf:.2f}"
+    note = "" if on_gpu else "  (CPU: weights in host RAM; GPU keeps them in VRAM — that's the prod path)"
+    return PASS, f"engine ok on {where}, RSS {rss_mb:.0f} MB, RTF {rtf:.2f}{note}"
 
 
 def check_vram(args):

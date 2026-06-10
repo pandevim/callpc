@@ -59,9 +59,15 @@ echo "=================== 3. preflight harness (inside vLLM image) =============
 apptainer exec --nv --writable-tmpfs --bind "$CALLPC_BIND" "$VLLM_SIF" bash -c '
     set -e
     python3 -m pip install --quiet onnxruntime-gpu sentencepiece soundfile huggingface_hub
-    # Expose the CUDA 12 / cuDNN 9 libs (shipped with torch under nvidia/*/lib)
-    # so onnxruntime-gpu CUDAExecutionProvider loads; else it falls back to CPU.
-    export LD_LIBRARY_PATH="$(find /usr /opt -path "*/nvidia/*/lib" -type d 2>/dev/null | sort -u | tr "\n" ":")/usr/local/cuda/lib64:${LD_LIBRARY_PATH:-}"
+    # onnxruntime-gpu is a CUDA-12 build, but this vLLM image ships CUDA 13
+    # (torch cu130) so libcublasLt.so.12 is absent. Install the CUDA-12 cuBLAS +
+    # cuDNN-9 runtime libs from pip so the CUDA EP can load (else it silently
+    # falls back to CPU, and the 0.6B weights sit in host RAM instead of VRAM).
+    python3 -m pip install --quiet nvidia-cublas-cu12 nvidia-cudnn-cu12 \
+        || echo "WARN: cu12 libs install failed — ASR will run on CPU"
+    # Put every pip-installed nvidia/*/lib dir on the path (pip --user lands them
+    # under ~/.local), plus the system CUDA dir.
+    export LD_LIBRARY_PATH="$(find "$HOME/.local" /usr /opt -path "*/nvidia/*/lib" -type d 2>/dev/null | sort -u | tr "\n" ":")/usr/local/cuda/lib64:${LD_LIBRARY_PATH:-}"
     # Stop onnxruntime pinning threads to cgroup-disallowed cores (affinity flood).
     export ORT_INTRA_OP_THREADS=$(nproc)
     cd '"$SERVER_DIR"'
