@@ -42,6 +42,13 @@ TTS_PORT=${TTS_PORT:-8089}
 ASR_PORT=${ASR_PORT:-8765}
 GATEWAY_PORT=${GATEWAY_PORT:-8080}
 
+# VRAM fractions + context lengths (override at submit to tune the budget).
+# UI-TARS weights alone are ~15.7 GB; at 0.42 the vision-encoder cache (sized to
+# the context) + KV go negative, so it needs 0.50 and a shorter context. Budget:
+# uitars 0.50 + brain 0.26 = 0.76 (~36 GB), leaving ~11 GB for TTS(5)+ASR(3.4).
+UITARS_UTIL=${UITARS_UTIL:-0.50};  UITARS_MAXLEN=${UITARS_MAXLEN:-16384}
+BRAIN_UTIL=${BRAIN_UTIL:-0.26};    BRAIN_MAXLEN=${BRAIN_MAXLEN:-16384}
+
 # Flip to 1 as each service gets built (see the blueprint blocks below).
 ENABLE_TTS=${ENABLE_TTS:-0}
 ENABLE_ASR=${ENABLE_ASR:-0}
@@ -99,8 +106,8 @@ nvidia-smi --query-gpu=name,memory.total --format=csv,noheader || true
 echo; echo "=== [1/5] vllm-uitars ($UITARS_MODEL) on :$UITARS_PORT ==="
 apptainer run --nv --bind "$CALLPC_BIND" "$VLLM_SIF" \
     "$UITARS_MODEL" --served-model-name ui-tars \
-    --port "$UITARS_PORT" --gpu-memory-utilization 0.42 \
-    --max-model-len 32768 --enforce-eager \
+    --port "$UITARS_PORT" --gpu-memory-utilization "$UITARS_UTIL" \
+    --max-model-len "$UITARS_MAXLEN" --enforce-eager \
     > "${LOG}_vllm-uitars.log" 2>&1 &
 BG_PIDS+=($!)
 wait_for_http "http://127.0.0.1:$UITARS_PORT/health" vllm-uitars "${BG_PIDS[-1]}" 900 \
@@ -116,8 +123,8 @@ wait_for_http "http://127.0.0.1:$UITARS_PORT/health" vllm-uitars "${BG_PIDS[-1]}
 echo; echo "=== [2/5] vllm-brain ($BRAIN_MODEL, fp8) on :$BRAIN_PORT ==="
 apptainer run --nv --bind "$CALLPC_BIND" "$VLLM_SIF" \
     "$BRAIN_MODEL" --served-model-name brain --quantization fp8 \
-    --port "$BRAIN_PORT" --gpu-memory-utilization 0.26 \
-    --max-model-len 16384 --enforce-eager \
+    --port "$BRAIN_PORT" --gpu-memory-utilization "$BRAIN_UTIL" \
+    --max-model-len "$BRAIN_MAXLEN" --enforce-eager \
     > "${LOG}_vllm-brain.log" 2>&1 &
 BG_PIDS+=($!)
 wait_for_http "http://127.0.0.1:$BRAIN_PORT/health" vllm-brain "${BG_PIDS[-1]}" 900 \
