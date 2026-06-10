@@ -63,7 +63,10 @@ apptainer exec --nv --writable-tmpfs --bind "$CALLPC_BIND" "$VLLM_SIF" bash -c '
     # (torch cu130) so libcublasLt.so.12 is absent. Install the CUDA-12 cuBLAS +
     # cuDNN-9 runtime libs from pip so the CUDA EP can load (else it silently
     # falls back to CPU, and the 0.6B weights sit in host RAM instead of VRAM).
-    python3 -m pip install --quiet nvidia-cublas-cu12 nvidia-cudnn-cu12 \
+    python3 -m pip install --quiet \
+        nvidia-cuda-runtime-cu12 nvidia-cublas-cu12 nvidia-cudnn-cu12 \
+        nvidia-cufft-cu12 nvidia-curand-cu12 nvidia-cusparse-cu12 \
+        nvidia-cuda-nvrtc-cu12 nvidia-nvjitlink-cu12 \
         || echo "WARN: cu12 libs install failed — ASR will run on CPU"
     # Put every pip-installed nvidia/*/lib dir on the path (pip --user lands them
     # under ~/.local), plus the system CUDA dir.
