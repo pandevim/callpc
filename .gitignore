@@ -1,0 +1,47 @@
+# --- models & weights (large, fetched via download scripts) ---
+server/asr/models/
+*.onnx
+*.onnx.data
+*.safetensors
+*.bin
+*.gguf
+hf_cache/
+.cache/
+
+# --- secrets (dotenvx: encrypted .env is committed, private keys are NOT) ---
+*.key
+.env.keys
+.env.local
+.secrets/
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+*.egg-info/
+.pytest_cache/
+.ipynb_checkpoints/
+
+# --- Rust (executor) ---
+target/
+**/*.rs.bk
+
+# --- Node / webapp ---
+node_modules/
+.next/
+dist/
+build/
+.vercel/
+*.log
+
+# --- SLURM / job artifacts ---
+slurm-*.out
+*.sif
+
+# --- OS / editor ---
+.DS_Store
+*.swp
+.idea/
+.vscode/
