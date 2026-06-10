@@ -29,6 +29,14 @@ class OnnxASR:
     def __init__(self, model_dir=MODEL_DIR, lang="en-US"):
         self.cfg = json.load(open(os.path.join(model_dir, "config.json")))
         so = ort.SessionOptions()
+        # Under a SLURM/cgroup cpu allocation, onnxruntime's default thread pool
+        # tries to pin threads to host cores outside the allowed set
+        # (pthread_setaffinity_np EINVAL flood). Setting intra-op threads
+        # explicitly (e.g. ORT_INTRA_OP_THREADS=$(nproc)) stops it touching affinity.
+        _nt = int(os.environ.get("ORT_INTRA_OP_THREADS", "0") or 0)
+        if _nt > 0:
+            so.intra_op_num_threads = _nt
+            so.inter_op_num_threads = 1
         prov = _providers()
         self.enc = ort.InferenceSession(os.path.join(model_dir, "encoder.onnx"), so, providers=prov)
         self.dec = ort.InferenceSession(os.path.join(model_dir, "decoder_joint.onnx"), so, providers=prov)
