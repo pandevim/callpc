@@ -54,7 +54,7 @@ echo "=================== 3. preflight harness (inside vLLM image) =============
 #
 # To also test the reverse-proxy chain, `export PUBLIC_URL=https://<id>.ngrok.app`
 # before sbatch and add `proxy` to the check list.
-apptainer exec --nv --writable-tmpfs "$VLLM_SIF" bash -c '
+apptainer exec --nv --writable-tmpfs --bind "$CALLPC_BIND" "$VLLM_SIF" bash -c '
     set -e
     pip install --quiet onnxruntime-gpu sentencepiece soundfile huggingface_hub
     cd '"$SERVER_DIR"'
