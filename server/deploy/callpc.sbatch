@@ -92,11 +92,15 @@ echo "================ callpc launcher ================"
 nvidia-smi --query-gpu=name,memory.total --format=csv,noheader || true
 
 # ============================ 1. UI-TARS (vLLM) ============================
+# Model is a POSITIONAL arg to `vllm serve` (the image entrypoint); --model is
+# deprecated. The task runner will later need a multi-image limit, but its JSON
+# value gets quote-mangled through `apptainer run` — re-add it then with dot
+# syntax instead of JSON:  --limit-mm-per-prompt.image 5
 echo; echo "=== [1/5] vllm-uitars ($UITARS_MODEL) on :$UITARS_PORT ==="
 apptainer run --nv --bind "$CALLPC_BIND" "$VLLM_SIF" \
-    --model "$UITARS_MODEL" --served-model-name ui-tars \
+    "$UITARS_MODEL" --served-model-name ui-tars \
     --port "$UITARS_PORT" --gpu-memory-utilization 0.42 \
-    --max-model-len 32768 --limit-mm-per-prompt '{"image":5}' --enforce-eager \
+    --max-model-len 32768 --enforce-eager \
     > "${LOG}_vllm-uitars.log" 2>&1 &
 BG_PIDS+=($!)
 wait_for_http "http://127.0.0.1:$UITARS_PORT/health" vllm-uitars "${BG_PIDS[-1]}" 900 \
@@ -111,7 +115,7 @@ wait_for_http "http://127.0.0.1:$UITARS_PORT/health" vllm-uitars "${BG_PIDS[-1]}
 # unknown-architecture message, the vLLM image is too old; re-pull :latest.
 echo; echo "=== [2/5] vllm-brain ($BRAIN_MODEL, fp8) on :$BRAIN_PORT ==="
 apptainer run --nv --bind "$CALLPC_BIND" "$VLLM_SIF" \
-    --model "$BRAIN_MODEL" --served-model-name brain --quantization fp8 \
+    "$BRAIN_MODEL" --served-model-name brain --quantization fp8 \
     --port "$BRAIN_PORT" --gpu-memory-utilization 0.26 \
     --max-model-len 16384 --enforce-eager \
     > "${LOG}_vllm-brain.log" 2>&1 &
