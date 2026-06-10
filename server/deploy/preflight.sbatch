@@ -32,13 +32,15 @@ echo
 echo "=================== 1. apptainer + GPU passthrough (--nv) ==================="
 # If the container can't see the GPU, nothing downstream works. Fail loud here.
 apptainer exec --nv "$VLLM_SIF" nvidia-smi --query-gpu=index,name,memory.total --format=csv,noheader
-apptainer exec --nv "$VLLM_SIF" python -c \
+# vllm/vllm-openai exposes `python3` (no `python` alias when run via exec, which
+# bypasses the image entrypoint). Use python3 throughout.
+apptainer exec --nv "$VLLM_SIF" python3 -c \
     "import torch; print('torch', torch.__version__, '| cuda', torch.cuda.is_available(), '|', torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'NO GPU')"
 
 echo
 echo "=================== 2. moshi image import ==================="
 if [ -f "$MOSHI_SIF" ]; then
-    apptainer exec --nv "$MOSHI_SIF" python -c "import moshi, msgpack; print('moshi import OK')" \
+    apptainer exec --nv "$MOSHI_SIF" python3 -c "import moshi, msgpack; print('moshi import OK')" \
         || echo "WARN: moshi image import failed"
 else
     echo "SKIP: $MOSHI_SIF not built yet"
@@ -56,9 +58,9 @@ echo "=================== 3. preflight harness (inside vLLM image) =============
 # before sbatch and add `proxy` to the check list.
 apptainer exec --nv --writable-tmpfs --bind "$CALLPC_BIND" "$VLLM_SIF" bash -c '
     set -e
-    pip install --quiet onnxruntime-gpu sentencepiece soundfile huggingface_hub
+    python3 -m pip install --quiet onnxruntime-gpu sentencepiece soundfile huggingface_hub
     cd '"$SERVER_DIR"'
-    python preflight.py env imports asr vram stun --download
+    python3 preflight.py env imports asr vram stun --download
 '
 
 echo
