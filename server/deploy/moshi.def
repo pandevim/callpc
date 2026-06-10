@@ -1,0 +1,24 @@
+Bootstrap: docker
+From: pytorch/pytorch:2.5.1-cuda12.4-cudnn9-runtime
+
+# Kyutai TTS (moshi) container. PLAN.md: pytorch base + moshi, run with
+# TORCHDYNAMO_DISABLE=1. We install the PyPI `moshi` package (not git+…) so the
+# build needs no git module on the login node. cu124 wheels run fine on a
+# cuda 12.8 driver (forward-compatible within 12.x), and on the L40S (Ada, sm_89).
+#
+# Build once on the login node:  apptainer build --fakeroot images/moshi.sif moshi.def
+
+%post
+    pip install --no-cache-dir moshi msgpack numpy
+
+%environment
+    export TORCHDYNAMO_DISABLE=1
+
+%test
+    # Sanity-check the import at build time so a broken image fails fast.
+    python -c "import moshi, msgpack; print('moshi import OK')"
+
+%runscript
+    # No fixed entrypoint yet — the streaming TTS server (Phase 1) will live in
+    # server/gateway/. For now the image is a moshi-capable python.
+    exec python "$@"

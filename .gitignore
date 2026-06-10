@@ -37,10 +37,14 @@ build/
 .vercel/
 *.log
 
-# --- SLURM / job artifacts ---
+# --- SLURM / Apptainer job artifacts ---
 slurm-*.out
 logs/
 *.sif
+server/deploy/images/
+.scratch/
+apptainer_cache/
+apptainer_tmp/
 
 # --- OS / editor ---
 .DS_Store
