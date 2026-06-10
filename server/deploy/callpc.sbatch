@@ -37,7 +37,7 @@ source deploy/_env.sh
 
 # --- config (all overridable at submit: `UITARS_PORT=9000 sbatch ...`) ---
 UITARS_PORT=${UITARS_PORT:-8000};  UITARS_MODEL=${UITARS_MODEL:-ByteDance-Seed/UI-TARS-1.5-7B}
-BRAIN_PORT=${BRAIN_PORT:-8001};    BRAIN_MODEL=${BRAIN_MODEL:-Qwen/Qwen3.5-9B-Instruct-FP8}
+BRAIN_PORT=${BRAIN_PORT:-8001};    BRAIN_MODEL=${BRAIN_MODEL:-Qwen/Qwen3.5-9B}
 TTS_PORT=${TTS_PORT:-8089}
 ASR_PORT=${ASR_PORT:-8765}
 GATEWAY_PORT=${GATEWAY_PORT:-8080}
@@ -103,10 +103,16 @@ wait_for_http "http://127.0.0.1:$UITARS_PORT/health" vllm-uitars "${BG_PIDS[-1]}
     || { echo "vllm-uitars failed — tail ${LOG}_vllm-uitars.log"; exit 1; }
 
 # ============================ 2. Qwen brain (vLLM) =========================
-echo; echo "=== [2/5] vllm-brain ($BRAIN_MODEL) on :$BRAIN_PORT ==="
+# No official 9B FP8 repo, so quantize the BF16 weights to FP8 at load (Ada
+# supports FP8) — this is the documented single-L40S pattern for Qwen3.5-9B.
+# Util bumped 0.22 -> 0.26 to cover the higher load-time peak of dynamic quant
+# (BF16 read -> FP8). If it OOMs, drop to BRAIN_MODEL=Qwen/Qwen3.5-4B.
+# NB: Qwen3.5's hybrid GDN arch needs vLLM >=0.17 — if the brain errors with an
+# unknown-architecture message, the vLLM image is too old; re-pull :latest.
+echo; echo "=== [2/5] vllm-brain ($BRAIN_MODEL, fp8) on :$BRAIN_PORT ==="
 apptainer run --nv --bind "$CALLPC_BIND" "$VLLM_SIF" \
-    --model "$BRAIN_MODEL" --served-model-name brain \
-    --port "$BRAIN_PORT" --gpu-memory-utilization 0.22 \
+    --model "$BRAIN_MODEL" --served-model-name brain --quantization fp8 \
+    --port "$BRAIN_PORT" --gpu-memory-utilization 0.26 \
     --max-model-len 16384 --enforce-eager \
     > "${LOG}_vllm-brain.log" 2>&1 &
 BG_PIDS+=($!)

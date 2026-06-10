@@ -30,7 +30,7 @@ source deploy/_env.sh
 [ -f "$VLLM_SIF" ] || { echo "ERROR: $VLLM_SIF missing — run deploy/build_images.sbatch first" >&2; exit 1; }
 
 UITARS_MODEL=${UITARS_MODEL:-ByteDance-Seed/UI-TARS-1.5-7B}
-BRAIN_MODEL=${BRAIN_MODEL:-Qwen/Qwen3.5-9B-Instruct-FP8}
+BRAIN_MODEL=${BRAIN_MODEL:-Qwen/Qwen3.5-9B}   # no official 9B FP8 repo; vLLM quantizes at load
 
 # Pass HF_TOKEN into the container if set (gated repos).
 [ -n "${HF_TOKEN:-}" ] && export APPTAINERENV_HF_TOKEN="$HF_TOKEN"

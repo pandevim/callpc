@@ -77,7 +77,7 @@ callpc/
 - **Alt (official streaming):** Rust `moshi-server` exposing a WS msgpack API (`ws://host:8080/api/tts_streaming?voice=<voice>`, `kyutai-api-key` header; send `{"type":"Text","text":word}`/`Eos`, receive `{"type":"Audio","pcm":[f32]}`). Lower latency but adds a Rust build — only if the Python path underperforms.
 ~220–350 ms to first audio; native 24 kHz. Cap VRAM ~4–6 GB (small batch). Either way the Pipecat `InterruptibleTTSService` cancels speech by closing the connection on barge-in.
 
-**Orchestrator LLM — Qwen3.5-9B** (newest small-dense generation, March 2026; Qwen leads open tool-calling benchmarks in this class; Qwen3.6 only ships 27B/35B-A3B — too big alongside UI-TARS). Serve FP8 (native on L40S Ada): `vllm serve Qwen/Qwen3.5-9B-Instruct-FP8 --max-model-len 16384 --gpu-memory-utilization 0.22 --enforce-eager`, thinking mode OFF for latency. Persona: terse, phone-style replies; confirms before destructive tasks. Upgrade path: Qwen3.6-35B-A3B-AWQ if we also move UI-TARS to FP8.
+**Orchestrator LLM — Qwen3.5-9B** (newest small-dense generation, March 2026; Qwen leads open tool-calling benchmarks in this class; Qwen3.6 only ships 27B/35B-A3B — too big alongside UI-TARS). Serve FP8 (native on L40S Ada) — note Qwen ships **no official 9B FP8 repo** (only 27B+), and the 9B model is `Qwen/Qwen3.5-9B` (Qwen3 dropped the `-Instruct` suffix), so quantize at load: `vllm serve Qwen/Qwen3.5-9B --quantization fp8 --max-model-len 16384 --gpu-memory-utilization 0.26 --enforce-eager`, thinking mode OFF for latency. Persona: terse, phone-style replies; confirms before destructive tasks. Upgrade path: Qwen3.6-35B-A3B-AWQ if we also move UI-TARS to FP8.
 
 **UI-TARS-1.5-7B** (Apache-2.0, Qwen2.5-VL base):
 
