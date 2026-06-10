@@ -43,11 +43,14 @@ ASR_PORT=${ASR_PORT:-8765}
 GATEWAY_PORT=${GATEWAY_PORT:-8080}
 
 # VRAM fractions + context lengths (override at submit to tune the budget).
-# UI-TARS weights alone are ~15.7 GB; at 0.42 the vision-encoder cache (sized to
-# the context) + KV go negative, so it needs 0.50 and a shorter context. Budget:
-# uitars 0.50 + brain 0.26 = 0.76 (~36 GB), leaving ~11 GB for TTS(5)+ASR(3.4).
+# UI-TARS weights ~15.7 GB; at 0.42 its vision-encoder cache (sized to context)
+# + KV went negative -> needs 0.50 + shorter context. Qwen3.5-9B is a HYBRID GDN
+# (mamba) + vision model: FP8 weights ~10.8 GB plus a mamba-state cache AND a
+# vision-encoder cache, so at 0.26 KV went negative too -> needs 0.32 + 8k ctx.
+# Budget: uitars 0.50 + brain 0.32 = 0.82 (~37 GB); trim both before enabling
+# TTS(5)+ASR(3.4) for the full stack.
 UITARS_UTIL=${UITARS_UTIL:-0.50};  UITARS_MAXLEN=${UITARS_MAXLEN:-16384}
-BRAIN_UTIL=${BRAIN_UTIL:-0.26};    BRAIN_MAXLEN=${BRAIN_MAXLEN:-16384}
+BRAIN_UTIL=${BRAIN_UTIL:-0.32};    BRAIN_MAXLEN=${BRAIN_MAXLEN:-8192}
 
 # Flip to 1 as each service gets built (see the blueprint blocks below).
 ENABLE_TTS=${ENABLE_TTS:-0}
