@@ -6,6 +6,7 @@ server/asr/models/
 *.bin
 *.gguf
 hf_cache/
+.hf_cache/
 .cache/
 
 # --- secrets (dotenvx: encrypted .env is committed, private keys are NOT) ---
@@ -38,6 +39,7 @@ build/
 
 # --- SLURM / job artifacts ---
 slurm-*.out
+logs/
 *.sif
 
 # --- OS / editor ---
