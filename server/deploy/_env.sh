@@ -1,11 +1,11 @@
 #!/bin/bash
 # Shared Apptainer env for all callpc cluster jobs. Source this from each
-# .sbatch (and from build_images.sh). It loads the apptainer module, points the
+# .sbatch (and from build_images.sbatch). It loads the apptainer module, points the
 # caches at node-local SSD, and exports the image + cache paths — it does NOT
-# build or pull anything (that's build_images.sh, a one-time login-node step;
+# build or pull anything (that is build_images.sbatch, a one-time compute-node step (sbatch);
 # concurrent image pulls on a shared FS race and corrupt the cache).
 #
-#   ./deploy/build_images.sh        # run ONCE on the login node first
+#   ./deploy/build_images.sbatch        # run ONCE on a compute node first
 #   sbatch deploy/preflight.sbatch  # jobs just source this file
 #
 # Mirrors the NeuralSINDy_v2 sbatch/_env.sh split, but the runtime is Apptainer

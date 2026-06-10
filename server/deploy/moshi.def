@@ -6,7 +6,7 @@ From: pytorch/pytorch:2.5.1-cuda12.4-cudnn9-runtime
 # build needs no git module on the login node. cu124 wheels run fine on a
 # cuda 12.8 driver (forward-compatible within 12.x), and on the L40S (Ada, sm_89).
 #
-# Build once on the login node:  apptainer build --fakeroot images/moshi.sif moshi.def
+# Built once by deploy/build_images.sbatch (on a compute node, not the login node).
 
 %post
     pip install --no-cache-dir moshi msgpack numpy

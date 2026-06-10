@@ -16,7 +16,7 @@
 # image imports, that the vendored ASR engine loads + runs (and its RAM/RTF),
 # the VRAM budget vs. the live 48 GB card, and WebRTC UDP egress (STUN).
 #
-# Requires: ./deploy/build_images.sh already run on the login node.
+# Requires: ./deploy/build_images.sbatch already run (sbatch deploy/build_images.sbatch).
 # Thin by design — all shared setup is in deploy/_env.sh (NeuralSINDy_v2 style).
 
 cd "${SLURM_SUBMIT_DIR:-$PWD}"
@@ -26,7 +26,7 @@ mkdir -p logs
 # shellcheck disable=SC1091
 source deploy/_env.sh
 
-[ -f "$VLLM_SIF" ] || { echo "ERROR: $VLLM_SIF missing — run ./deploy/build_images.sh first" >&2; exit 1; }
+[ -f "$VLLM_SIF" ] || { echo "ERROR: $VLLM_SIF missing — run ./deploy/build_images.sbatch first" >&2; exit 1; }
 
 echo
 echo "=================== 1. apptainer + GPU passthrough (--nv) ==================="
