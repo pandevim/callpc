@@ -45,8 +45,16 @@ const $ = id => document.getElementById(id);
 const api = (p, opt) => fetch(p, opt).then(r => r.json());
 
 let timer = null;
+let lastRendered = "";
 
 function render(st) {
+  // a step's screenshot never changes once taken — only re-render (and only
+  // re-fetch images) when the status payload actually changed, else the page
+  // jitters every poll
+  const key = JSON.stringify([st.state, st.detail, (st.steps || []).length,
+                              (st.steps || []).map(s => s.result)]);
+  if (key === lastRendered) return;
+  lastRendered = key;
   const cls = st.state === "running" ? "running" : (st.state === "failed" ? "failed" : "");
   $("status").innerHTML =
     `<span class="${cls}">${st.state}</span>` +
@@ -59,7 +67,7 @@ function render(st) {
     div.className = "step";
     div.innerHTML = `
       <a href="/api/task/screenshot/${s.n}" target="_blank">
-        <img src="/api/task/screenshot/${s.n}?ts=${st.ts || ""}" alt="step ${s.n}"></a>
+        <img src="/api/task/screenshot/${s.n}" alt="step ${s.n}"></a>
       <div class="txt">
         <div class="n">step ${s.n}</div>
         <div class="thought">${(s.thought || "").replace(/</g, "&lt;")}</div>
