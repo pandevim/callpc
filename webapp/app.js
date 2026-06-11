@@ -141,7 +141,12 @@ async function startCall() {
   show("ringing");
   setRingStatus("requesting microphone…");
   try {
-    micStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+    micStream = await navigator.mediaDevices.getUserMedia({
+      // explicit AEC/NS: on speakerphone the bot otherwise hears itself and
+      // barges in on its own reply
+      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+      video: false,
+    });
   } catch (e) {
     return endCall("Microphone blocked", "Allow mic access and try again.");
   }

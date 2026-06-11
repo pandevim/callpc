@@ -327,6 +327,13 @@ else:
 if __name__ == "__main__":
     import uvicorn
 
+    # Preload the shared ASR engine BEFORE binding the port: the launcher's
+    # /health gate then covers it, and the first call doesn't lose its opening
+    # words to a ~4 s model load.
+    import stt_nemotron
+    print("[gateway] preloading ASR engine...", flush=True)
+    stt_nemotron._get_engine(STT_LANG, None)
+
     tts_info = TTS_WS_URL if TTS_ENABLED else "DISABLED (text-only)"
     print(f"[gateway] starting on {HOST}:{PORT} (STT lang={STT_LANG}, TTS {tts_info})", flush=True)
     uvicorn.run(app, host=HOST, port=PORT)

@@ -2,9 +2,11 @@
 
 Wraps the vendored server/asr/onnx_engine.OnnxStreamingSession. Pipecat resamples
 the caller's mic audio to the sample_rate we request (16 kHz) and hands run_stt()
-raw 16-bit PCM bytes; we feed it to the engine, emit interim transcripts as text
-accrues (~0.56 s cadence — the export's fixed chunk geometry), and flush the final
-TranscriptionFrame when the user stops speaking (VAD).
+raw 16-bit PCM bytes; we batch it to the engine's native 560 ms window and emit
+each text delta IMMEDIATELY as a final TranscriptionFrame fragment — Pipecat's
+universal aggregator assembles the turn with its own stop strategies. Holding
+text until VAD-stop is a trap: on noisy phone-speaker calls Silero may never
+emit UserStoppedSpeaking (seen live — whole utterances swallowed).
 
 Pipecat API (verified June 2026): STTService.run_stt(audio: bytes) ->
 AsyncGenerator[Frame]; frames + processor base from pipecat.*. If a future
@@ -20,7 +22,6 @@ import numpy as np
 
 from pipecat.frames.frames import (
     Frame,
-    InterimTranscriptionFrame,
     TranscriptionFrame,
     UserStartedSpeakingFrame,
     UserStoppedSpeakingFrame,
@@ -85,7 +86,7 @@ class NemotronSTTService(STTService):
             print(info, flush=True)
 
         self._session = onnx_engine.OnnxStreamingSession(self._asr, sample_rate=self.SAMPLE_RATE)
-        self._acc = ""  # accumulated text for the in-flight utterance
+        self._buf = bytearray()  # audio pending until one full engine window
         # SINGLE-thread executor: feed/finalize/reset mutate one session; on the
         # default pool they ran on different threads concurrently (audio keeps
         # flowing while a VAD stop is being finalized) and raced. One worker
@@ -97,39 +98,60 @@ class NemotronSTTService(STTService):
         # the engine is blocking numpy/onnx — keep it off the event loop
         return await asyncio.get_running_loop().run_in_executor(self._exec, fn, *args)
 
+    # Hard cap on session length between resets: feed() recomputes the mel over
+    # the whole since-reset audio (O(n^2) over a call), and resets normally
+    # happen at VAD boundaries — which may NEVER fire on noisy phone-speaker
+    # calls. 45 s of speech without a boundary forces a flush+reset.
+    MAX_SESSION_S = 45
+
+    def _final(self, text: str) -> TranscriptionFrame:
+        return TranscriptionFrame(text.strip(), self._user_id, time_now_iso8601(),
+                                  language=self._lang)
+
     async def run_stt(self, audio: bytes):
-        """Feed one PCM chunk; emit a cumulative interim transcript if text grew."""
-        pcm = np.frombuffer(audio, dtype=np.int16)
-        if pcm.size == 0:
+        """Buffer to the engine's native 560 ms window, then emit each text
+        delta IMMEDIATELY as a final fragment (Pipecat's aggregator assembles
+        the turn with its own stop strategies). We deliberately do NOT hold
+        text until VAD stop: on a noisy phone-speaker call Silero can fire
+        'user started' but never 'user stopped', which used to swallow whole
+        utterances — VAD stop is only a tail-flush bonus now."""
+        self._buf += audio
+        if len(self._buf) < self._session.chunk_bytes:
             return
-        delta = await self._in_thread(self._session.feed, pcm)
-        if delta:
-            self._acc += delta
-            yield InterimTranscriptionFrame(
-                self._acc.strip(), self._user_id, time_now_iso8601(), language=self._lang)
+        pcm = np.frombuffer(bytes(self._buf), dtype=np.int16)
+        self._buf.clear()
+        try:
+            delta = await self._in_thread(self._session.feed, pcm)
+        except Exception as e:  # noqa: BLE001 — keep the call alive
+            print(f"[NemotronSTT] feed failed ({type(e).__name__}: {e})", flush=True)
+            await self._in_thread(self._session.reset)
+            return
+        if delta and delta.strip():
+            yield self._final(delta)
+        if len(self._session._audio) > self.SAMPLE_RATE * self.MAX_SESSION_S:
+            async for f in self._flush("session cap"):
+                yield f
+
+    async def _flush(self, why: str):
+        """Flush the engine's pending window (tail text) and reset the session."""
+        try:
+            tail = await self._in_thread(self._session.finalize)
+        except Exception as e:  # noqa: BLE001
+            print(f"[NemotronSTT] finalize failed on {why} ({type(e).__name__}: {e})", flush=True)
+            tail = ""
+        try:
+            await self._in_thread(self._session.reset)
+        except Exception as e:  # noqa: BLE001
+            print(f"[NemotronSTT] reset failed ({type(e).__name__}: {e})", flush=True)
+        self._buf.clear()
+        if tail and tail.strip():
+            yield self._final(tail)
 
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         await super().process_frame(frame, direction)
-        # VAD boundaries drive utterance reset + finalization.
-        if isinstance(frame, UserStartedSpeakingFrame):
-            self._acc = ""
-            await self._in_thread(self._session.reset)
-        elif isinstance(frame, UserStoppedSpeakingFrame):
-            # NEVER lose the turn: without a final TranscriptionFrame the
-            # aggregator won't run the LLM and the call goes silent. If the
-            # engine flush fails, the accumulated interims ARE the transcript.
-            try:
-                tail = await self._in_thread(self._session.finalize)
-            except Exception as e:  # noqa: BLE001 — degrade to interims, keep the call alive
-                print(f"[NemotronSTT] finalize failed ({type(e).__name__}: {e}); "
-                      "using interim text", flush=True)
-                tail = ""
-            text = (self._acc + (tail or "")).strip()
-            self._acc = ""
-            try:
-                await self._in_thread(self._session.reset)
-            except Exception as e:  # noqa: BLE001
-                print(f"[NemotronSTT] reset failed ({type(e).__name__}: {e})", flush=True)
-            if text:
-                await self.push_frame(
-                    TranscriptionFrame(text, self._user_id, time_now_iso8601(), language=self._lang))
+        # VAD boundaries are tail-flush + reset points when they DO fire
+        # (utterance text already streamed out as fragments either way).
+        if isinstance(frame, (UserStartedSpeakingFrame, UserStoppedSpeakingFrame)):
+            boundary = "vad start" if isinstance(frame, UserStartedSpeakingFrame) else "vad stop"
+            async for f in self._flush(boundary):
+                await self.push_frame(f)
