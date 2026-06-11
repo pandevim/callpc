@@ -18,11 +18,19 @@ from fastapi import BackgroundTasks, FastAPI
 from fastapi.responses import HTMLResponse, JSONResponse
 
 from pipecat.audio.vad.silero import SileroVADAnalyzer
-from pipecat.frames.frames import Frame, InterimTranscriptionFrame, TranscriptionFrame
+from pipecat.frames.frames import (
+    Frame,
+    InterimTranscriptionFrame,
+    LLMFullResponseEndFrame,
+    TextFrame,
+    TranscriptionFrame,
+)
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineParams, PipelineTask
+from pipecat.processors.aggregators.openai_llm_context import OpenAILLMContext
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
+from pipecat.services.openai.llm import OpenAILLMService
 from pipecat.transports.base_transport import TransportParams
 from pipecat.transports.smallwebrtc.connection import SmallWebRTCConnection
 from pipecat.transports.smallwebrtc.transport import SmallWebRTCTransport
@@ -32,6 +40,23 @@ from stt_nemotron import NemotronSTTService
 HOST = os.environ.get("GATEWAY_HOST", "0.0.0.0")
 PORT = int(os.environ.get("GATEWAY_PORT", "8080"))
 STT_LANG = os.environ.get("STT_LANG", "en-US")
+
+# Brain: the Qwen orchestrator served by vLLM (OpenAI-compatible). In the
+# launcher it's on the same node at :8001; vLLM ignores the api_key.
+BRAIN_BASE_URL = os.environ.get("BRAIN_BASE_URL", "http://127.0.0.1:8001/v1")
+BRAIN_MODEL = os.environ.get("BRAIN_MODEL", "brain")
+BRAIN_API_KEY = os.environ.get("BRAIN_API_KEY", "x")
+
+# Phone-style persona (Phase 1b: conversational only — the computer_task tool is
+# wired in Phase 3, so don't claim tasks are done yet).
+PERSONA = os.environ.get("PERSONA", (
+    "You are callpc, a helpful assistant someone reached by calling their computer "
+    "on the phone. You are speaking out loud, so keep replies short and natural — "
+    "one or two sentences, no lists, no markdown, no emoji. If asked to do something "
+    "on the computer, respond conversationally and say you'll be able to once you're "
+    "fully set up; don't pretend a task is finished. Ask a brief clarifying question "
+    "when you need to."
+))
 
 
 def _ice_config():
@@ -62,8 +87,7 @@ _connections: dict[str, SmallWebRTCConnection] = {}  # pc_id -> connection
 
 
 class TranscriptLogger(FrameProcessor):
-    """Prints interim + final transcripts so STT is visible end-to-end. This is
-    the Phase-1a stand-in for the brain; it just forwards frames downstream."""
+    """Prints the caller's interim + final transcripts (placed after STT)."""
 
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         await super().process_frame(frame, direction)
@@ -71,6 +95,27 @@ class TranscriptLogger(FrameProcessor):
             print(f"[FINAL]   {frame.text!r}", flush=True)
         elif isinstance(frame, InterimTranscriptionFrame):
             print(f"[interim] {frame.text!r}", flush=True)
+        await self.push_frame(frame, direction)
+
+
+class BotLogger(FrameProcessor):
+    """Accumulates the brain's streamed text and prints the full reply on
+    response end (placed after the LLM). Until TTS lands, this is how we see the
+    bot 'talk'. TranscriptionFrame subclasses TextFrame, so exclude it."""
+
+    def __init__(self):
+        super().__init__()
+        self._buf = ""
+
+    async def process_frame(self, frame: Frame, direction: FrameDirection):
+        await super().process_frame(frame, direction)
+        if isinstance(frame, TextFrame) and not isinstance(
+                frame, (TranscriptionFrame, InterimTranscriptionFrame)):
+            self._buf += frame.text
+        elif isinstance(frame, LLMFullResponseEndFrame):
+            if self._buf.strip():
+                print(f"[bot]     {self._buf.strip()!r}", flush=True)
+            self._buf = ""
         await self.push_frame(frame, direction)
 
 
@@ -85,11 +130,21 @@ async def _run_bot(connection: SmallWebRTCConnection):
         ),
     )
     stt = NemotronSTTService(lang=STT_LANG)
+    llm = OpenAILLMService(api_key=BRAIN_API_KEY, base_url=BRAIN_BASE_URL, model=BRAIN_MODEL)
+    context = OpenAILLMContext(messages=[{"role": "system", "content": PERSONA}])
+    agg = llm.create_context_aggregator(context)
+
+    # caller mic -> STT -> (log) -> user-context -> brain -> (log) -> out -> assistant-context
+    # allow_interruptions=True gives barge-in once TTS is producing audio.
     pipeline = Pipeline([
         transport.input(),
         stt,
         TranscriptLogger(),
+        agg.user(),
+        llm,
+        BotLogger(),
         transport.output(),
+        agg.assistant(),
     ])
     task = PipelineTask(pipeline, params=PipelineParams(allow_interruptions=True))
     runner = PipelineRunner(handle_sigint=False)

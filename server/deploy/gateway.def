@@ -14,8 +14,9 @@ From: pytorch/pytorch:2.5.1-cuda12.4-cudnn9-runtime
     # which shares the import name with onnxruntime-gpu and clobbers it (build #1
     # ended up CPU-only). So install it now, then force the GPU build to win.
     pip install --no-cache-dir \
-        "pipecat-ai[webrtc,silero]" \
+        "pipecat-ai[webrtc,silero,openai]" \
         pipecat-ai-small-webrtc-prebuilt \
+        openai \
         sentencepiece soundfile numpy msgpack \
         fastapi "uvicorn[standard]"
     # pipecat[webrtc] pulls full opencv-python, which needs X11 libs (libxcb.so.1
@@ -51,7 +52,9 @@ from pipecat.transports.base_transport import TransportParams
 from pipecat.transports.smallwebrtc.connection import SmallWebRTCConnection
 from pipecat.transports.smallwebrtc.transport import SmallWebRTCTransport
 from pipecat.services.stt_service import STTService
-from pipecat.frames.frames import TranscriptionFrame, InterimTranscriptionFrame
+from pipecat.services.openai.llm import OpenAILLMService
+from pipecat.processors.aggregators.openai_llm_context import OpenAILLMContext
+from pipecat.frames.frames import TranscriptionFrame, InterimTranscriptionFrame, TextFrame, LLMFullResponseEndFrame
 provs = ort.get_available_providers()
 print("providers", provs)
 assert "CUDAExecutionProvider" in provs, "onnxruntime-gpu NOT installed (CPU build won)"

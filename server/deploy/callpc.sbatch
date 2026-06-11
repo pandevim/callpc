@@ -180,9 +180,17 @@ fi
 # Port + ORT thread count passed via env (APPTAINERENV_* -> container env).
 if [ "$ENABLE_GATEWAY" = 1 ]; then
     [ -f "$GATEWAY_SIF" ] || { echo "ERROR: $GATEWAY_SIF missing — build it (deploy/build_images.sbatch)"; exit 1; }
-    echo; echo "=== [5/5] gateway on :$GATEWAY_PORT ==="
+    echo; echo "=== [5/5] gateway on :$GATEWAY_PORT (brain @ :$BRAIN_PORT) ==="
+    # WebRTC media needs TURN across the cluster NAT — pass creds through if set:
+    #   TURN_URL=... TURN_USER=... TURN_PASS=... ENABLE_GATEWAY=1 sbatch deploy/callpc.sbatch
+    [ -n "${TURN_URL:-}" ]  && export APPTAINERENV_TURN_URL="$TURN_URL"
+    [ -n "${TURN_USER:-}" ] && export APPTAINERENV_TURN_USER="$TURN_USER"
+    [ -n "${TURN_PASS:-}" ] && export APPTAINERENV_TURN_PASS="$TURN_PASS"
+    [ -z "${TURN_URL:-}" ] && echo "WARN: TURN_URL unset — WebRTC media will likely fail over the cluster NAT"
     APPTAINERENV_GATEWAY_PORT="$GATEWAY_PORT" \
     APPTAINERENV_ORT_INTRA_OP_THREADS="$(nproc)" \
+    APPTAINERENV_BRAIN_BASE_URL="http://127.0.0.1:$BRAIN_PORT/v1" \
+    APPTAINERENV_BRAIN_MODEL="brain" \
     apptainer run --nv --bind "$CALLPC_BIND" "$GATEWAY_SIF" \
         "$SERVER_DIR/gateway/app.py" \
         > "${LOG}_gateway.log" 2>&1 &
