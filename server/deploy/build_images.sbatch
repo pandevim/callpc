@@ -52,18 +52,22 @@ else
     echo "built: $VLLM_SIF"
 fi
 
+# .def-built images rebuild automatically when their .def changed since the
+# last build (otherwise a def edit silently keeps running the old image).
 echo "=== moshi (Kyutai TTS) image ==="
-if [ -f "$MOSHI_SIF" ]; then
-    echo "exists: $MOSHI_SIF (delete to refresh)"
+if [ -f "$MOSHI_SIF" ] && [ ! deploy/moshi.def -nt "$MOSHI_SIF" ]; then
+    echo "exists: $MOSHI_SIF (up to date; delete to force refresh)"
 else
+    [ -f "$MOSHI_SIF" ] && { echo "stale: deploy/moshi.def is newer — rebuilding"; rm -f "$MOSHI_SIF"; }
     apptainer build --fakeroot "$MOSHI_SIF" deploy/moshi.def
     echo "built: $MOSHI_SIF"
 fi
 
 echo "=== gateway (Pipecat + ASR) image ==="
-if [ -f "$GATEWAY_SIF" ]; then
-    echo "exists: $GATEWAY_SIF (delete to refresh)"
+if [ -f "$GATEWAY_SIF" ] && [ ! deploy/gateway.def -nt "$GATEWAY_SIF" ]; then
+    echo "exists: $GATEWAY_SIF (up to date; delete to force refresh)"
 else
+    [ -f "$GATEWAY_SIF" ] && { echo "stale: deploy/gateway.def is newer — rebuilding"; rm -f "$GATEWAY_SIF"; }
     apptainer build --fakeroot "$GATEWAY_SIF" deploy/gateway.def
     echo "built: $GATEWAY_SIF"
 fi

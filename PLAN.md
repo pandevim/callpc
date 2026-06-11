@@ -151,7 +151,7 @@ The L40S is reached through a **SLURM batch cluster** (university HPC), not a pe
 - `gateway/tts_server.py` — streaming TTS WS server (moshi image): vendored DSM `TTSGen` step loop → int16 24 kHz PCM per 80 ms frame as it generates; abort-on-disconnect (barge-in); `/health` answers only after load + warmup. Protocol mirrors the ASR server's (`start/text/flush` → binary frames → `end`).
 - `gateway/tts_kyutai.py` — Pipecat `InterruptibleTTSService` WS client (LMNT-pattern lifecycle); wired into the pipeline in `app.py` (`TTS_WS_URL`, `off` = text-only).
 - `gateway/tts_selftest.py` — client smoke test (TTFA / RTF / wav out).
-- To verify on the L40S: **rebuild `moshi.sif`** (now adds `websockets`; build_images.sbatch), re-run `prefetch_weights.sbatch` (now stages `kyutai/tts-1.6b-en_fr` + voices — compute nodes can't download), then `sbatch deploy/callpc.sbatch` (new defaults = Phase-1 voice loop: brain+TTS+gateway, **UI-TARS off** — all four services don't fit the proven VRAM fractions; trim per the sbatch comment for the full stack) and run `tts_selftest.py` + a real call.
+- To verify on the L40S: **rebuild `moshi.sif`** (now adds `websockets`; build_images.sbatch auto-rebuilds when a `.def` is newer than its `.sif`), re-run `prefetch_weights.sbatch` (now stages `kyutai/tts-1.6b-en_fr` + voices — compute nodes can't download), then `sbatch deploy/callpc.sbatch` (new defaults = Phase-1 voice loop: brain+TTS+gateway, **UI-TARS off** — all four services don't fit the proven VRAM fractions; trim per the sbatch comment for the full stack) and run `tts_selftest.py` + a real call.
 
 **Remaining in Phase 1:** verify TTS on the cluster + barge-in tuning; then the custom phone-call webapp (currently a minimal built-in test page).
 
