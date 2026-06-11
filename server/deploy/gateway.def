@@ -1,0 +1,38 @@
+Bootstrap: docker
+From: pytorch/pytorch:2.5.1-cuda12.4-cudnn9-runtime
+
+# callpc voice gateway image. CUDA-12 base ON PURPOSE: onnxruntime-gpu is a
+# CUDA-12 build, so on this base its CUDA EP loads with no LD_LIBRARY_PATH
+# juggling (unlike the CUDA-13 vLLM image — see PLAN/memory). Bakes in Pipecat
+# (WebRTC + Silero VAD), the ASR runtime, and FastAPI/uvicorn so the gateway
+# runs the Nemotron STT in-process on the GPU.
+#
+# Built once by deploy/build_images.sbatch (compute node).
+
+%post
+    pip install --no-cache-dir \
+        "pipecat-ai[webrtc,silero]" \
+        pipecat-ai-small-webrtc-prebuilt \
+        onnxruntime-gpu \
+        sentencepiece soundfile numpy msgpack \
+        fastapi "uvicorn[standard]"
+    # CUDA-12 runtime libs for onnxruntime-gpu's CUDA EP (cublasLt/cudnn/etc).
+    pip install --no-cache-dir \
+        nvidia-cuda-runtime-cu12 nvidia-cublas-cu12 nvidia-cudnn-cu12 \
+        nvidia-cufft-cu12 nvidia-curand-cu12 nvidia-cusparse-cu12 \
+        nvidia-cuda-nvrtc-cu12 nvidia-nvjitlink-cu12
+
+%environment
+    export TORCHDYNAMO_DISABLE=1
+    # Put the pip-installed CUDA-12 libs on the path so onnxruntime-gpu loads them.
+    export LD_LIBRARY_PATH="$(ls -d /opt/conda/lib/python*/site-packages/nvidia/*/lib 2>/dev/null | tr '\n' ':')/usr/local/cuda/lib64:${LD_LIBRARY_PATH:-}"
+
+%test
+    # Fail the build early if the core imports or the CUDA EP aren't there.
+    python -c "import pipecat, fastapi, onnxruntime as ort, sentencepiece; \
+print('providers', ort.get_available_providers()); \
+print('gateway image imports OK')"
+
+%runscript
+    # `apptainer run gateway.sif <script.py> [args]` -> python <script.py> [args]
+    exec python "$@"

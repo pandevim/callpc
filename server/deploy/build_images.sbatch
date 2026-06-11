@@ -60,6 +60,14 @@ else
     echo "built: $MOSHI_SIF"
 fi
 
+echo "=== gateway (Pipecat + ASR) image ==="
+if [ -f "$GATEWAY_SIF" ]; then
+    echo "exists: $GATEWAY_SIF (delete to refresh)"
+else
+    apptainer build --fakeroot "$GATEWAY_SIF" deploy/gateway.def
+    echo "built: $GATEWAY_SIF"
+fi
+
 echo
 echo "images ready in $IMAGES_DIR:"
 ls -lh "$IMAGES_DIR"/*.sif 2>/dev/null || true

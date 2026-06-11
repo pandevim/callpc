@@ -21,6 +21,7 @@ export SERVER_DIR="$(dirname "$DEPLOY_DIR")"
 export IMAGES_DIR="$DEPLOY_DIR/images"
 export VLLM_SIF="${VLLM_SIF:-$IMAGES_DIR/vllm.sif}"
 export MOSHI_SIF="${MOSHI_SIF:-$IMAGES_DIR/moshi.sif}"
+export GATEWAY_SIF="${GATEWAY_SIF:-$IMAGES_DIR/gateway.sif}"
 mkdir -p "$IMAGES_DIR"
 
 # --- Apptainer module ---

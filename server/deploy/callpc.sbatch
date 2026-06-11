@@ -174,20 +174,23 @@ else
 fi
 
 # ============================ 5. gateway ===================================
-# BLUEPRINT — the Pipecat FastAPI gateway (server/gateway/app.py): /api/offer
-# signaling, static call UI, the voice pipeline (Nemotron STT + brain + Kyutai
-# TTS). Needs a gateway image (CUDA-12 base, onnxruntime-gpu + pipecat baked in).
-# Flip ENABLE_GATEWAY=1 when it exists.
+# The Pipecat FastAPI gateway (server/gateway/app.py): /api/offer signaling +
+# the voice pipeline. Phase 1a = mic -> Nemotron STT -> log transcripts. Runs in
+# the CUDA-12 gateway image (onnxruntime-gpu CUDA EP works there with no lib hack).
+# Port + ORT thread count passed via env (APPTAINERENV_* -> container env).
 if [ "$ENABLE_GATEWAY" = 1 ]; then
+    [ -f "$GATEWAY_SIF" ] || { echo "ERROR: $GATEWAY_SIF missing — build it (deploy/build_images.sbatch)"; exit 1; }
     echo; echo "=== [5/5] gateway on :$GATEWAY_PORT ==="
-    # apptainer run --nv --bind "$CALLPC_BIND" "$GATEWAY_SIF" \
-    #     "$SERVER_DIR/gateway/app.py" --port "$GATEWAY_PORT" \
-    #     > "${LOG}_gateway.log" 2>&1 &
-    # BG_PIDS+=($!)
-    # wait_for_http "http://127.0.0.1:$GATEWAY_PORT/" gateway "${BG_PIDS[-1]}" 300 || exit 1
-    echo "(gateway image not built yet — see blueprint)"
+    APPTAINERENV_GATEWAY_PORT="$GATEWAY_PORT" \
+    APPTAINERENV_ORT_INTRA_OP_THREADS="$(nproc)" \
+    apptainer run --nv --bind "$CALLPC_BIND" "$GATEWAY_SIF" \
+        "$SERVER_DIR/gateway/app.py" \
+        > "${LOG}_gateway.log" 2>&1 &
+    BG_PIDS+=($!)
+    wait_for_http "http://127.0.0.1:$GATEWAY_PORT/health" gateway "${BG_PIDS[-1]}" 300 \
+        || { echo "gateway failed — tail ${LOG}_gateway.log"; exit 1; }
 else
-    echo; echo "=== [5/5] gateway: DISABLED (set ENABLE_GATEWAY=1 once app.py + image exist) ==="
+    echo; echo "=== [5/5] gateway: DISABLED (set ENABLE_GATEWAY=1) ==="
 fi
 
 # ============================ up — banner + wait ===========================
