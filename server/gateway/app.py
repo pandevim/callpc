@@ -10,8 +10,10 @@ Run: `python app.py` inside the gateway image (GATEWAY_PORT from env). The ASR
 model must be present at server/asr/models/onnx (the preflight `asr --download`
 already staged it).
 """
+import json
 import os
 
+from aiortc import RTCIceServer
 from fastapi import BackgroundTasks, FastAPI
 from fastapi.responses import HTMLResponse, JSONResponse
 
@@ -27,10 +29,30 @@ from pipecat.transports.smallwebrtc.transport import SmallWebRTCTransport
 
 from stt_nemotron import NemotronSTTService
 
-ICE_SERVERS = ["stun:stun.l.google.com:19302"]
 HOST = os.environ.get("GATEWAY_HOST", "0.0.0.0")
 PORT = int(os.environ.get("GATEWAY_PORT", "8080"))
 STT_LANG = os.environ.get("STT_LANG", "en-US")
+
+
+def _ice_config():
+    """STUN always; add TURN if TURN_URL is set (needed when media can't traverse
+    the cluster NAT — the browser shows 'ICE failed, add a TURN server'). Returns
+    plain dicts for the browser; the server converts them to RTCIceServer."""
+    servers = [{"urls": "stun:stun.l.google.com:19302"}]
+    turn = os.environ.get("TURN_URL")
+    if turn:
+        s = {"urls": turn}
+        if os.environ.get("TURN_USER"):
+            s["username"] = os.environ["TURN_USER"]
+        if os.environ.get("TURN_PASS"):
+            s["credential"] = os.environ["TURN_PASS"]
+        servers.append(s)
+    return servers
+
+
+ICE_CONFIG = _ice_config()                                  # dicts -> injected into the page
+ICE_SERVERS = [RTCIceServer(**s) for s in ICE_CONFIG]        # -> aiortc (server side)
+print(f"[gateway] ICE servers: {[s['urls'] for s in ICE_CONFIG]}", flush=True)
 
 app = FastAPI()
 _connections: dict[str, SmallWebRTCConnection] = {}  # pc_id -> connection
@@ -118,7 +140,7 @@ document.getElementById('go').onclick = async () => {
   try {
     log('requesting mic...');
     const stream = await navigator.mediaDevices.getUserMedia({audio:true, video:false});
-    const pc = new RTCPeerConnection({iceServers:[{urls:'stun:stun.l.google.com:19302'}]});
+    const pc = new RTCPeerConnection({iceServers: __ICE_SERVERS__});
     stream.getTracks().forEach(t => pc.addTrack(t, stream));
     pc.ontrack = e => { document.getElementById('remote').srcObject = e.streams[0]; };
     pc.onconnectionstatechange = () => log('peer: ' + pc.connectionState);
@@ -144,7 +166,7 @@ document.getElementById('go').onclick = async () => {
 
 @app.get("/", response_class=HTMLResponse)
 async def index():
-    return _CALL_UI
+    return _CALL_UI.replace("__ICE_SERVERS__", json.dumps(ICE_CONFIG))
 
 
 if __name__ == "__main__":
