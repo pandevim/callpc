@@ -176,7 +176,7 @@ The L40S is reached through a **SLURM batch cluster** (university HPC), not a pe
 ## Top risks
 
 1. UI-TARS coordinate mapping (smart_resize) — mitigated by calibration test before any real task.
-2. TTS streaming on the cluster — the proven moshi-in-Apptainer server is HTTP/non-streaming; making it stream low-latency is the main TTS risk. Fallback: Rust `moshi-server` WS, or chunk the HTTP output finely.
+2. TTS streaming on the cluster — the proven moshi-in-Apptainer server is HTTP/non-streaming; making it stream low-latency is the main TTS risk. Fallback: Rust `moshi-server` WS, or chunk the HTTP output finely. If full-stack VRAM gets tight (Phase 3, all five services): **Kyutai Pocket TTS** (`kyutai/pocket-tts`, 100M CALM, Jan 2026) runs on CPU at ~200 ms TTFA / ~6× realtime — frees the TTS ~5 GB of VRAM and stays in the Kyutai ecosystem; trade-off is per-sentence input + some quality drop vs 1.6B. (Researched June 2026: MOSS-TTS-Nano-100M rejected — CPU-first, no GPU TTFB/English benchmarks published, sentence-level input only; MOSS-TTS-Realtime-1.7B is the only other true text-streaming model but its verified 180 ms TTFB is on a dedicated L20 — no real gain over our 220–350 ms on a shared L40S.)
 3. Linux-Wayland input/screenshot quirks — enigo/libei first, dotool-style absolute-axis uinput fallback; Xorg session as last resort.
 4. VRAM startup ordering on the single 48 GB L40S — fixed `--gpu-memory-utilization` fractions + ordered launch with health-checks; if the ~38/48 GB budget gets tight, drop the brain to a smaller quant (Qwen3.5-4B-FP8) or enable vLLM sleep-mode on UI-TARS between tasks.
 5. Unsigned binaries — SmartScreen/Gatekeeper warnings until signing/notarization lands (Phase 4); document right-click-open for macOS.
