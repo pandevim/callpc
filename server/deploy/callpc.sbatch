@@ -256,8 +256,13 @@ fi
 NGROK_URL=""
 if [ -n "${NGROK_AUTHTOKEN:-}" ] && command -v ngrok >/dev/null 2>&1 && [ "$ENABLE_GATEWAY" = 1 ]; then
     echo; echo "=== ngrok ==="
+    # --domain wants a BARE hostname; tolerate a pasted URL (scheme/trailing
+    # slash => ERR_NGROK_9038 "Invalid URL").
+    NGROK_DOMAIN="${NGROK_DOMAIN:-}"
+    NGROK_DOMAIN="${NGROK_DOMAIN#https://}"; NGROK_DOMAIN="${NGROK_DOMAIN#http://}"
+    NGROK_DOMAIN="${NGROK_DOMAIN%%/*}"
     NGROK_ARGS=(http "$GATEWAY_PORT" --log stdout --log-format json)
-    [ -n "${NGROK_DOMAIN:-}" ] && NGROK_ARGS+=(--domain "$NGROK_DOMAIN")
+    [ -n "$NGROK_DOMAIN" ] && NGROK_ARGS+=(--domain "$NGROK_DOMAIN")
     NGROK_AUTHTOKEN="$NGROK_AUTHTOKEN" ngrok "${NGROK_ARGS[@]}" > "${LOG}_ngrok.log" 2>&1 &
     BG_PIDS+=($!)
     for _ in $(seq 1 15); do
