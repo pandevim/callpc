@@ -57,22 +57,34 @@ def save_conf(conf: dict):
 
 
 def make_screenshot() -> bytes:
-    """Labeled grid 'desktop' (pillow), or a tiny PNG without it."""
+    """Labeled grid 'desktop' (pillow), or a tiny PNG without it.
+
+    Labels are LARGE, bright, and centered in their cells: the calibration
+    check measures coordinate-mapping accuracy, and tiny corner labels made
+    the model misread rows on distant cells (perception, not mapping)."""
     try:
-        from PIL import Image, ImageDraw
+        from PIL import Image, ImageDraw, ImageFont
     except ImportError:
         return _TINY_PNG
+    try:
+        font = ImageFont.truetype("DejaVuSans-Bold.ttf", 30)
+    except Exception:
+        try:
+            font = ImageFont.load_default(size=30)  # Pillow >= 10.1
+        except Exception:
+            font = ImageFont.load_default()
     img = Image.new("RGB", (SCREEN_W, SCREEN_H), (24, 28, 44))
     d = ImageDraw.Draw(img)
     step = 100
     for x in range(0, SCREEN_W, step):
-        d.line([(x, 0), (x, SCREEN_H)], fill=(60, 70, 100))
+        d.line([(x, 0), (x, SCREEN_H)], fill=(70, 82, 118))
     for y in range(0, SCREEN_H, step):
-        d.line([(0, y), (SCREEN_W, y)], fill=(60, 70, 100))
+        d.line([(0, y), (SCREEN_W, y)], fill=(70, 82, 118))
     for x in range(0, SCREEN_W, step):
         for y in range(0, SCREEN_H, step):
-            d.text((x + 6, y + 4), f"{chr(65 + x // step)}{y // step}", fill=(160, 175, 210))
-    d.text((SCREEN_W // 2 - 80, SCREEN_H // 2), "callpc fake desktop", fill=(110, 231, 160))
+            label = f"{chr(65 + x // step)}{y // step}"
+            d.text((x + step // 2, y + step // 2), label,
+                   fill=(225, 232, 248), font=font, anchor="mm")
     buf = io.BytesIO()
     img.save(buf, format="PNG")
     return buf.getvalue()
