@@ -219,9 +219,58 @@ else
     echo; echo "=== [5/5] gateway: DISABLED (set ENABLE_GATEWAY=1) ==="
 fi
 
-# ============================ up — banner + wait ===========================
+# ===================== reachability (no per-node tunnels) ==================
 NODE=$(hostname)
-LOGIN_HOST=${LOGIN_HOST:-<cluster-login-host>}
+# The submit host IS the login node — no placeholder to edit.
+LOGIN_HOST=${LOGIN_HOST:-${SLURM_SUBMIT_HOST:-}}
+
+# (a) Reverse-forward the gateway port to the LOGIN node. The laptop then
+# always tunnels to localhost on the login node — the laptop command never
+# changes with the compute node again. Needs intra-cluster ssh (shared $HOME:
+# one-time `ssh-keygen -t ed25519 -N "" && cat ~/.ssh/id_ed25519.pub >>
+# ~/.ssh/authorized_keys`). A stale listener from a crashed job is cleared
+# best-effort first; ours dies with the job via the cleanup trap.
+SSH_TUNNEL_UP=0
+if [ "${ENABLE_SSH_TUNNEL:-1}" = 1 ] && [ -n "$LOGIN_HOST" ] && [ "$ENABLE_GATEWAY" = 1 ]; then
+    echo; echo "=== reverse tunnel -> $LOGIN_HOST:$GATEWAY_PORT ==="
+    ssh -o StrictHostKeyChecking=accept-new -o BatchMode=yes "$LOGIN_HOST" \
+        "fuser -k -n tcp $GATEWAY_PORT 2>/dev/null; true" 2>/dev/null || true
+    ssh -o StrictHostKeyChecking=accept-new -o BatchMode=yes \
+        -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 \
+        -N -R "127.0.0.1:$GATEWAY_PORT:127.0.0.1:$GATEWAY_PORT" "$LOGIN_HOST" \
+        > "${LOG}_sshtunnel.log" 2>&1 &
+    BG_PIDS+=($!)
+    sleep 2
+    if kill -0 "${BG_PIDS[-1]}" 2>/dev/null; then
+        SSH_TUNNEL_UP=1
+        echo "[tunnel] up: $LOGIN_HOST:$GATEWAY_PORT -> $NODE:$GATEWAY_PORT"
+    else
+        echo "WARN: reverse tunnel failed (intra-cluster ssh keys set up? see ${LOG}_sshtunnel.log)"
+    fi
+fi
+
+# (b) Optional ngrok straight from the job: a public HTTPS URL with NO laptop
+# in the loop (phone-callable). Needs the ngrok binary (~/.local/bin) and
+# NGROK_AUTHTOKEN; NGROK_DOMAIN (a free reserved static domain) makes the URL
+# identical across jobs. Skipped silently when not configured.
+NGROK_URL=""
+if [ -n "${NGROK_AUTHTOKEN:-}" ] && command -v ngrok >/dev/null 2>&1 && [ "$ENABLE_GATEWAY" = 1 ]; then
+    echo; echo "=== ngrok ==="
+    NGROK_ARGS=(http "$GATEWAY_PORT" --log stdout --log-format json)
+    [ -n "${NGROK_DOMAIN:-}" ] && NGROK_ARGS+=(--domain "$NGROK_DOMAIN")
+    NGROK_AUTHTOKEN="$NGROK_AUTHTOKEN" ngrok "${NGROK_ARGS[@]}" > "${LOG}_ngrok.log" 2>&1 &
+    BG_PIDS+=($!)
+    for _ in $(seq 1 15); do
+        NGROK_URL=$(curl -s http://127.0.0.1:4040/api/tunnels 2>/dev/null \
+            | grep -o '"public_url":"https:[^"]*"' | head -1 | cut -d'"' -f4)
+        [ -n "$NGROK_URL" ] && break
+        sleep 2
+    done
+    [ -n "$NGROK_URL" ] && echo "[ngrok] public URL: $NGROK_URL" \
+        || echo "WARN: ngrok started but no URL yet — tail ${LOG}_ngrok.log"
+fi
+
+# ============================ up — banner + wait ===========================
 echo
 echo "================== callpc UP =================="
 echo "compute node : $NODE"
@@ -229,9 +278,18 @@ echo "vLLM (in-job): $([ "$ENABLE_UITARS" = 1 ] && echo "ui-tars http://127.0.0.
 echo "moshi-tts    : $([ "$ENABLE_TTS" = 1 ] && echo "ws://127.0.0.1:$TTS_PORT" || echo "disabled")"
 echo "gateway port : $GATEWAY_PORT"
 echo
-echo "Expose the gateway from your laptop:"
-echo "  ssh -f -N -L $GATEWAY_PORT:$NODE:$GATEWAY_PORT \$USER@$LOGIN_HOST"
-echo "  ngrok http $GATEWAY_PORT"
+if [ -n "$NGROK_URL" ]; then
+    echo "PHONE / ANY DEVICE:  $NGROK_URL"
+fi
+if [ "$SSH_TUNNEL_UP" = 1 ]; then
+    echo "LAPTOP (same command every job — target is the login node, not $NODE):"
+    echo "  ssh -f -N -L $GATEWAY_PORT:localhost:$GATEWAY_PORT \$USER@$LOGIN_HOST"
+    echo "  then open http://localhost:$GATEWAY_PORT"
+    echo "  (or add to ~/.ssh/config under the login host: LocalForward $GATEWAY_PORT localhost:$GATEWAY_PORT)"
+else
+    echo "Expose the gateway from your laptop (per-node fallback):"
+    echo "  ssh -f -N -L $GATEWAY_PORT:$NODE:$GATEWAY_PORT \$USER@$LOGIN_HOST"
+fi
 echo
 echo "Verify services with the preflight, pointed at this job:"
 echo "  UITARS_URL=http://127.0.0.1:$UITARS_PORT BRAIN_URL=http://127.0.0.1:$BRAIN_PORT \\"
