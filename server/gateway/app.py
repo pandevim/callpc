@@ -43,9 +43,10 @@ from pipecat.transports.smallwebrtc.transport import SmallWebRTCTransport
 from stt_nemotron import NemotronSTTService
 from tts_kyutai import KyutaiTTSService
 
-# control hub (Phase 2) lives in server/control — one dir up
+# control hub + task runner (Phase 2) live in server/control + server/tasks
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from control.hub import router as control_router  # noqa: E402
+from tasks.runner import router as tasks_router   # noqa: E402
 
 HOST = os.environ.get("GATEWAY_HOST", "0.0.0.0")
 PORT = int(os.environ.get("GATEWAY_PORT", "8080"))
@@ -106,6 +107,7 @@ app = FastAPI()
 app.add_middleware(CORSMiddleware, allow_origins=["*"],
                    allow_methods=["*"], allow_headers=["*"])
 app.include_router(control_router)  # /control/ws + /api/pair|devices|control/*
+app.include_router(tasks_router)    # /api/task* + /api/calibrate (debug.html)
 _connections: dict[str, SmallWebRTCConnection] = {}  # pc_id -> connection
 _tasks: dict[str, PipelineTask] = {}                  # pc_id -> running pipeline
 

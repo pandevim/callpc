@@ -18,7 +18,8 @@ From: pytorch/pytorch:2.5.1-cuda12.4-cudnn9-runtime
         pipecat-ai-small-webrtc-prebuilt \
         openai \
         sentencepiece soundfile numpy msgpack \
-        fastapi "uvicorn[standard]"
+        fastapi "uvicorn[standard]" \
+        ui-tars pillow
     # pipecat[webrtc] pulls full opencv-python, which needs X11 libs (libxcb.so.1
     # etc.) absent in the slim base -> ImportError. Swap to headless for a server.
     pip uninstall -y opencv-python opencv-python-headless || true
@@ -47,6 +48,10 @@ From: pytorch/pytorch:2.5.1-cuda12.4-cudnn9-runtime
     python <<'PY'
 import pipecat, fastapi, cv2, sentencepiece, soundfile, numpy
 import onnxruntime as ort
+# task-runner deps (Phase 2): fail the build if the parser API moved
+from ui_tars.action_parser import add_box_token, parse_action_to_structure_output, smart_resize
+from PIL import Image
+from openai import AsyncOpenAI
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner

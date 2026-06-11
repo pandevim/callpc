@@ -44,19 +44,21 @@ GATEWAY_PORT=${GATEWAY_PORT:-8080}
 
 # VRAM fractions + context lengths (override at submit to tune the budget).
 # UI-TARS weights ~15.7 GB; at 0.42 its vision-encoder cache (sized to context)
-# + KV went negative -> needs 0.50 + shorter context. Qwen3.5-9B is a HYBRID GDN
+# + KV went negative -> 16k ctx needed 0.50. Qwen3.5-9B is a HYBRID GDN
 # (mamba) + vision model: FP8 weights ~10.8 GB plus a mamba-state cache AND a
 # vision-encoder cache, so at 0.26 KV went negative too -> needs 0.32 + 8k ctx.
-# Budget: uitars 0.50 + brain 0.32 measured 35.3 GB; + TTS(~5) + in-gateway
-# ASR(3.4) = ~44/45 GB — too tight. Phase-1 default is UI-TARS OFF (~22 GB
-# total); for the full Phase-3 stack trim to e.g. UITARS_UTIL=0.46
-# UITARS_MAXLEN=8192 BRAIN_UTIL=0.30 and verify with `preflight.py vram`.
-UITARS_UTIL=${UITARS_UTIL:-0.50};  UITARS_MAXLEN=${UITARS_MAXLEN:-16384}
-BRAIN_UTIL=${BRAIN_UTIL:-0.32};    BRAIN_MAXLEN=${BRAIN_MAXLEN:-8192}
+# FULL-STACK budget (Phase 2+): uitars 0.46@8k (~20.7) + brain 0.30 (~13.5)
+# + TTS(~5) + in-gateway ASR(~3.4) ≈ 42.6/45 GB. The 8k ctx bounds the task
+# runner to ~3 screenshots of history (1280x800 ≈ 1.3k tokens each). If
+# vllm-uitars fails with a negative-KV error, raise UITARS_UTIL and drop
+# BRAIN_MAXLEN to 4096. Verify with `preflight.py vram`.
+UITARS_UTIL=${UITARS_UTIL:-0.46};  UITARS_MAXLEN=${UITARS_MAXLEN:-8192}
+BRAIN_UTIL=${BRAIN_UTIL:-0.30};    BRAIN_MAXLEN=${BRAIN_MAXLEN:-8192}
 
-# Service toggles. Defaults = the Phase-1 voice loop. ASR stays 0: STT runs
+# Service toggles. Defaults = full Phase-2 stack. ASR stays 0: STT runs
 # in-process inside the gateway (the standalone block below is the alternative).
-ENABLE_UITARS=${ENABLE_UITARS:-0}
+# Voice-only (more headroom): ENABLE_UITARS=0 sbatch deploy/callpc.sbatch
+ENABLE_UITARS=${ENABLE_UITARS:-1}
 ENABLE_TTS=${ENABLE_TTS:-1}
 ENABLE_ASR=${ENABLE_ASR:-0}
 ENABLE_GATEWAY=${ENABLE_GATEWAY:-1}
@@ -112,10 +114,13 @@ nvidia-smi --query-gpu=name,memory.total --format=csv,noheader || true
 # syntax instead of JSON:  --limit-mm-per-prompt.image 5
 if [ "$ENABLE_UITARS" = 1 ]; then
     echo; echo "=== [1/5] vllm-uitars ($UITARS_MODEL) on :$UITARS_PORT ==="
+    # --limit-mm-per-prompt.image: dot syntax on purpose — the JSON form gets
+    # quote-mangled through apptainer run. 5 = the task runner's max history.
     apptainer run --nv --bind "$CALLPC_BIND" "$VLLM_SIF" \
         "$UITARS_MODEL" --served-model-name ui-tars \
         --port "$UITARS_PORT" --gpu-memory-utilization "$UITARS_UTIL" \
         --max-model-len "$UITARS_MAXLEN" --enforce-eager \
+        --limit-mm-per-prompt.image 5 \
         > "${LOG}_vllm-uitars.log" 2>&1 &
     BG_PIDS+=($!)
     wait_for_http "http://127.0.0.1:$UITARS_PORT/health" vllm-uitars "${BG_PIDS[-1]}" 900 \
@@ -209,6 +214,7 @@ if [ "$ENABLE_GATEWAY" = 1 ]; then
     APPTAINERENV_ORT_INTRA_OP_THREADS="$(nproc)" \
     APPTAINERENV_BRAIN_BASE_URL="http://127.0.0.1:$BRAIN_PORT/v1" \
     APPTAINERENV_BRAIN_MODEL="brain" \
+    APPTAINERENV_UITARS_BASE_URL="http://127.0.0.1:$UITARS_PORT/v1" \
     apptainer run --nv --bind "$CALLPC_BIND" "$GATEWAY_SIF" \
         "$SERVER_DIR/gateway/app.py" \
         > "${LOG}_gateway.log" 2>&1 &
