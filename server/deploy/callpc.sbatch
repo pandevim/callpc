@@ -261,8 +261,10 @@ if [ -n "${NGROK_AUTHTOKEN:-}" ] && command -v ngrok >/dev/null 2>&1 && [ "$ENAB
     NGROK_AUTHTOKEN="$NGROK_AUTHTOKEN" ngrok "${NGROK_ARGS[@]}" > "${LOG}_ngrok.log" 2>&1 &
     BG_PIDS+=($!)
     for _ in $(seq 1 15); do
+        # `|| true`: grep finds nothing until ngrok's API is up — must not
+        # trip pipefail/errexit (this exact line once killed the whole job).
         NGROK_URL=$(curl -s http://127.0.0.1:4040/api/tunnels 2>/dev/null \
-            | grep -o '"public_url":"https:[^"]*"' | head -1 | cut -d'"' -f4)
+            | grep -o '"public_url":"https:[^"]*"' | head -1 | cut -d'"' -f4 || true)
         [ -n "$NGROK_URL" ] && break
         sleep 2
     done

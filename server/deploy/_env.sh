@@ -13,7 +13,11 @@
 #
 # Edit the module name below to match `module avail apptainer` on your cluster.
 
-set -euo pipefail
+# NO `set -e` here: this file is SOURCED, so its shell flags leak into the
+# caller. callpc.sbatch deliberately runs without -e (a failing service must
+# reach the cleanup trap, not kill the script mid-line) — the leaked -e killed
+# a job inside the ngrok poll loop. Callers own their own -e.
+set -uo pipefail
 
 # --- Paths (server/ is the working base; deploy/ lives under it) ---
 DEPLOY_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
