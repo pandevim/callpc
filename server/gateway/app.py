@@ -28,7 +28,8 @@ from pipecat.frames.frames import (
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineParams, PipelineTask
-from pipecat.processors.aggregators.openai_llm_context import OpenAILLMContext
+from pipecat.processors.aggregators.llm_context import LLMContext
+from pipecat.processors.aggregators.llm_response_universal import LLMContextAggregatorPair
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from pipecat.services.openai.llm import OpenAILLMService
 from pipecat.transports.base_transport import TransportParams
@@ -131,8 +132,8 @@ async def _run_bot(connection: SmallWebRTCConnection):
     )
     stt = NemotronSTTService(lang=STT_LANG)
     llm = OpenAILLMService(api_key=BRAIN_API_KEY, base_url=BRAIN_BASE_URL, model=BRAIN_MODEL)
-    context = OpenAILLMContext(messages=[{"role": "system", "content": PERSONA}])
-    agg = llm.create_context_aggregator(context)
+    context = LLMContext(messages=[{"role": "system", "content": PERSONA}])
+    agg = LLMContextAggregatorPair(context)
 
     # caller mic -> STT -> (log) -> user-context -> brain -> (log) -> out -> assistant-context
     # allow_interruptions=True gives barge-in once TTS is producing audio.

@@ -31,9 +31,13 @@ From: pytorch/pytorch:2.5.1-cuda12.4-cudnn9-runtime
         nvidia-cuda-runtime-cu12 nvidia-cublas-cu12 nvidia-cudnn-cu12 \
         nvidia-cufft-cu12 nvidia-curand-cu12 nvidia-cusparse-cu12 \
         nvidia-cuda-nvrtc-cu12 nvidia-nvjitlink-cu12
+    # Pipecat needs NLTK 'punkt_tab' for sentence splitting; the runtime fs is
+    # read-only, so bake it into the image and point NLTK_DATA at it.
+    python -c "import nltk; nltk.download('punkt_tab', download_dir='/opt/nltk_data')"
 
 %environment
     export TORCHDYNAMO_DISABLE=1
+    export NLTK_DATA=/opt/nltk_data
     # Put the pip-installed CUDA-12 libs on the path so onnxruntime-gpu loads them.
     export LD_LIBRARY_PATH="$(ls -d /opt/conda/lib/python*/site-packages/nvidia/*/lib 2>/dev/null | tr '\n' ':')/usr/local/cuda/lib64:${LD_LIBRARY_PATH:-}"
 
@@ -53,8 +57,12 @@ from pipecat.transports.smallwebrtc.connection import SmallWebRTCConnection
 from pipecat.transports.smallwebrtc.transport import SmallWebRTCTransport
 from pipecat.services.stt_service import STTService
 from pipecat.services.openai.llm import OpenAILLMService
-from pipecat.processors.aggregators.openai_llm_context import OpenAILLMContext
+from pipecat.processors.aggregators.llm_context import LLMContext
+from pipecat.processors.aggregators.llm_response_universal import LLMContextAggregatorPair
 from pipecat.frames.frames import TranscriptionFrame, InterimTranscriptionFrame, TextFrame, LLMFullResponseEndFrame
+# exercise the context aggregator pair (validates .user()/.assistant() at build)
+_p = LLMContextAggregatorPair(LLMContext(messages=[{"role": "system", "content": "x"}]))
+_p.user(); _p.assistant()
 provs = ort.get_available_providers()
 print("providers", provs)
 assert "CUDAExecutionProvider" in provs, "onnxruntime-gpu NOT installed (CPU build won)"
