@@ -20,11 +20,11 @@
 # Prereqs: deploy/build_images.sbatch (images) + deploy/prefetch_weights.sbatch
 # (model weights staged in HF_HOME). Then:  sbatch deploy/callpc.sbatch
 #
-# STATUS: the two vLLM services are fully wired and runnable now. moshi-tts /
-# asr / gateway are scaffolded as ready-to-fill blueprints (the services aren't
-# built yet) — enable each by flipping ENABLE_* below once its code lands. The
-# orchestration framework (health gates, PID tracking, cleanup trap, tunnel
-# banner) is complete and works with whatever subset is enabled.
+# STATUS: vLLMs + gateway + moshi-tts are built and wired (standalone ASR stays
+# a blueprint — STT runs in-process in the gateway). Default ENABLE_* set =
+# the Phase-1 voice loop: brain + tts + gateway, UI-TARS OFF for VRAM headroom
+# (it's a Phase-2 service; the full 5-service stack needs the fractions trimmed
+# — see the VRAM note below).
 
 set -uo pipefail   # NOT -e: a single service failing should run cleanup, not die silently
 cd "${SLURM_SUBMIT_DIR:-$PWD}"
@@ -47,15 +47,19 @@ GATEWAY_PORT=${GATEWAY_PORT:-8080}
 # + KV went negative -> needs 0.50 + shorter context. Qwen3.5-9B is a HYBRID GDN
 # (mamba) + vision model: FP8 weights ~10.8 GB plus a mamba-state cache AND a
 # vision-encoder cache, so at 0.26 KV went negative too -> needs 0.32 + 8k ctx.
-# Budget: uitars 0.50 + brain 0.32 = 0.82 (~37 GB); trim both before enabling
-# TTS(5)+ASR(3.4) for the full stack.
+# Budget: uitars 0.50 + brain 0.32 measured 35.3 GB; + TTS(~5) + in-gateway
+# ASR(3.4) = ~44/45 GB — too tight. Phase-1 default is UI-TARS OFF (~22 GB
+# total); for the full Phase-3 stack trim to e.g. UITARS_UTIL=0.46
+# UITARS_MAXLEN=8192 BRAIN_UTIL=0.30 and verify with `preflight.py vram`.
 UITARS_UTIL=${UITARS_UTIL:-0.50};  UITARS_MAXLEN=${UITARS_MAXLEN:-16384}
 BRAIN_UTIL=${BRAIN_UTIL:-0.32};    BRAIN_MAXLEN=${BRAIN_MAXLEN:-8192}
 
-# Flip to 1 as each service gets built (see the blueprint blocks below).
-ENABLE_TTS=${ENABLE_TTS:-0}
+# Service toggles. Defaults = the Phase-1 voice loop. ASR stays 0: STT runs
+# in-process inside the gateway (the standalone block below is the alternative).
+ENABLE_UITARS=${ENABLE_UITARS:-0}
+ENABLE_TTS=${ENABLE_TTS:-1}
 ENABLE_ASR=${ENABLE_ASR:-0}
-ENABLE_GATEWAY=${ENABLE_GATEWAY:-0}
+ENABLE_GATEWAY=${ENABLE_GATEWAY:-1}
 
 [ -n "${HF_TOKEN:-}" ] && export APPTAINERENV_HF_TOKEN="$HF_TOKEN"
 
@@ -106,15 +110,19 @@ nvidia-smi --query-gpu=name,memory.total --format=csv,noheader || true
 # deprecated. The task runner will later need a multi-image limit, but its JSON
 # value gets quote-mangled through `apptainer run` — re-add it then with dot
 # syntax instead of JSON:  --limit-mm-per-prompt.image 5
-echo; echo "=== [1/5] vllm-uitars ($UITARS_MODEL) on :$UITARS_PORT ==="
-apptainer run --nv --bind "$CALLPC_BIND" "$VLLM_SIF" \
-    "$UITARS_MODEL" --served-model-name ui-tars \
-    --port "$UITARS_PORT" --gpu-memory-utilization "$UITARS_UTIL" \
-    --max-model-len "$UITARS_MAXLEN" --enforce-eager \
-    > "${LOG}_vllm-uitars.log" 2>&1 &
-BG_PIDS+=($!)
-wait_for_http "http://127.0.0.1:$UITARS_PORT/health" vllm-uitars "${BG_PIDS[-1]}" 900 \
-    || { echo "vllm-uitars failed — tail ${LOG}_vllm-uitars.log"; exit 1; }
+if [ "$ENABLE_UITARS" = 1 ]; then
+    echo; echo "=== [1/5] vllm-uitars ($UITARS_MODEL) on :$UITARS_PORT ==="
+    apptainer run --nv --bind "$CALLPC_BIND" "$VLLM_SIF" \
+        "$UITARS_MODEL" --served-model-name ui-tars \
+        --port "$UITARS_PORT" --gpu-memory-utilization "$UITARS_UTIL" \
+        --max-model-len "$UITARS_MAXLEN" --enforce-eager \
+        > "${LOG}_vllm-uitars.log" 2>&1 &
+    BG_PIDS+=($!)
+    wait_for_http "http://127.0.0.1:$UITARS_PORT/health" vllm-uitars "${BG_PIDS[-1]}" 900 \
+        || { echo "vllm-uitars failed — tail ${LOG}_vllm-uitars.log"; exit 1; }
+else
+    echo; echo "=== [1/5] vllm-uitars: DISABLED (Phase-2 service; set ENABLE_UITARS=1 + trim fractions) ==="
+fi
 
 # ============================ 2. Qwen brain (vLLM) =========================
 # No official 9B FP8 repo, so quantize the BF16 weights to FP8 at load (Ada
@@ -134,19 +142,22 @@ wait_for_http "http://127.0.0.1:$BRAIN_PORT/health" vllm-brain "${BG_PIDS[-1]}" 
     || { echo "vllm-brain failed — tail ${LOG}_vllm-brain.log"; exit 1; }
 
 # ============================ 3. moshi TTS =================================
-# BLUEPRINT — needs the streaming TTS server (Phase 1, server/gateway/tts_*.py).
-# When built, flip ENABLE_TTS=1. Runs in the moshi image; binds the repo so it
-# can import the server module.
+# Streaming Kyutai TTS (server/gateway/tts_server.py) in the moshi image.
+# /health answers only after model load + warmup synthesis, so the gate below
+# means "ready for a real call" (first load also downloads the voice -> the
+# 900 s timeout). TTS_VOICE overrides the voice (kyutai/tts-voices names).
 if [ "$ENABLE_TTS" = 1 ]; then
+    [ -f "$MOSHI_SIF" ] || { echo "ERROR: $MOSHI_SIF missing — build it (deploy/build_images.sbatch)"; exit 1; }
     echo; echo "=== [3/5] moshi-tts on :$TTS_PORT ==="
+    [ -n "${TTS_VOICE:-}" ] && export APPTAINERENV_TTS_VOICE="$TTS_VOICE"
     apptainer run --nv --bind "$CALLPC_BIND" "$MOSHI_SIF" \
         "$SERVER_DIR/gateway/tts_server.py" --port "$TTS_PORT" \
         > "${LOG}_moshi-tts.log" 2>&1 &
     BG_PIDS+=($!)
-    wait_for_http "http://127.0.0.1:$TTS_PORT/health" moshi-tts "${BG_PIDS[-1]}" 600 \
-        || { echo "moshi-tts failed"; exit 1; }
+    wait_for_http "http://127.0.0.1:$TTS_PORT/health" moshi-tts "${BG_PIDS[-1]}" 900 \
+        || { echo "moshi-tts failed — tail ${LOG}_moshi-tts.log"; exit 1; }
 else
-    echo; echo "=== [3/5] moshi-tts: DISABLED (set ENABLE_TTS=1 once tts_server.py exists) ==="
+    echo; echo "=== [3/5] moshi-tts: DISABLED (set ENABLE_TTS=1; gateway runs text-only) ==="
 fi
 
 # ============================ 4. ASR (ws_engine) ===========================
@@ -187,6 +198,13 @@ if [ "$ENABLE_GATEWAY" = 1 ]; then
     [ -n "${TURN_USER:-}" ] && export APPTAINERENV_TURN_USER="$TURN_USER"
     [ -n "${TURN_PASS:-}" ] && export APPTAINERENV_TURN_PASS="$TURN_PASS"
     [ -z "${TURN_URL:-}" ] && echo "WARN: TURN_URL unset — WebRTC media will likely fail over the cluster NAT"
+    # TTS: point the gateway at the moshi server, or run text-only when off.
+    if [ "$ENABLE_TTS" = 1 ]; then
+        APPTAINERENV_TTS_WS_URL="ws://127.0.0.1:$TTS_PORT"
+    else
+        APPTAINERENV_TTS_WS_URL="off"
+    fi
+    export APPTAINERENV_TTS_WS_URL
     APPTAINERENV_GATEWAY_PORT="$GATEWAY_PORT" \
     APPTAINERENV_ORT_INTRA_OP_THREADS="$(nproc)" \
     APPTAINERENV_BRAIN_BASE_URL="http://127.0.0.1:$BRAIN_PORT/v1" \
@@ -207,8 +225,9 @@ LOGIN_HOST=${LOGIN_HOST:-<cluster-login-host>}
 echo
 echo "================== callpc UP =================="
 echo "compute node : $NODE"
-echo "vLLM (in-job): ui-tars http://127.0.0.1:$UITARS_PORT   brain http://127.0.0.1:$BRAIN_PORT"
-echo "gateway port : $GATEWAY_PORT (enable once built)"
+echo "vLLM (in-job): $([ "$ENABLE_UITARS" = 1 ] && echo "ui-tars http://127.0.0.1:$UITARS_PORT   ")brain http://127.0.0.1:$BRAIN_PORT"
+echo "moshi-tts    : $([ "$ENABLE_TTS" = 1 ] && echo "ws://127.0.0.1:$TTS_PORT" || echo "disabled")"
+echo "gateway port : $GATEWAY_PORT"
 echo
 echo "Expose the gateway from your laptop:"
 echo "  ssh -f -N -L $GATEWAY_PORT:$NODE:$GATEWAY_PORT \$USER@$LOGIN_HOST"

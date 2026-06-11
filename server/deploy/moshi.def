@@ -1,24 +1,31 @@
 Bootstrap: docker
 From: pytorch/pytorch:2.5.1-cuda12.4-cudnn9-runtime
 
-# Kyutai TTS (moshi) container. PLAN.md: pytorch base + moshi, run with
-# TORCHDYNAMO_DISABLE=1. We install the PyPI `moshi` package (not git+…) so the
-# build needs no git module on the login node. cu124 wheels run fine on a
-# cuda 12.8 driver (forward-compatible within 12.x), and on the L40S (Ada, sm_89).
+# Kyutai TTS (moshi) container. PLAN.md: pytorch base + moshi. We install the
+# PyPI `moshi` package (not git+…) so the build needs no git module on the
+# login node. cu124 wheels run fine on a cuda 12.8 driver (forward-compatible
+# within 12.x), and on the L40S (Ada, sm_89).
+#
+# moshi pinned <0.3: gateway/tts_server.py vendors the TTSGen step loop, whose
+# internals (LMGen hooks, state machine) are verified against 0.2.11–0.2.13.
+# websockets >=13 for the new asyncio API (websockets.asyncio.server).
 #
 # Built once by deploy/build_images.sbatch (on a compute node, not the login node).
 
 %post
-    pip install --no-cache-dir moshi msgpack numpy
+    pip install --no-cache-dir "moshi>=0.2.11,<0.3" "websockets>=13" msgpack numpy
 
 %environment
     export TORCHDYNAMO_DISABLE=1
+    # moshi's own compile switch (it checks NO_TORCH_COMPILE, not dynamo's var).
+    # Skipping torch.compile keeps startup/warmup fast; the L40S runs the 1.6B
+    # TTS faster than real time eagerly. CUDA graphs stay ON (fixed batch=1).
+    export NO_TORCH_COMPILE=1
 
 %test
-    # Sanity-check the import at build time so a broken image fails fast.
-    python -c "import moshi, msgpack; print('moshi import OK')"
+    # Sanity-check the imports at build time so a broken image fails fast.
+    python -c "import moshi, msgpack, websockets.asyncio.server; print('moshi import OK')"
 
 %runscript
-    # No fixed entrypoint yet — the streaming TTS server (Phase 1) will live in
-    # server/gateway/. For now the image is a moshi-capable python.
+    # Runs the given script, e.g. server/gateway/tts_server.py --port 8089
     exec python "$@"

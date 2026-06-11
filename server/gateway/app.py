@@ -1,7 +1,8 @@
 """callpc voice gateway — FastAPI + Pipecat SmallWebRTC.
 
-Phase 1a (this file): caller mic -> Nemotron STT -> log transcripts -> audio out.
-The brain (Qwen tool-calling) and Kyutai TTS splice into this same pipeline next.
+Phase 1 voice loop: caller mic -> Nemotron STT -> Qwen brain -> Kyutai TTS ->
+caller speaker, with barge-in (Silero VAD + allow_interruptions; the TTS service
+drops its socket on interruption, which aborts generation server-side).
 
 Signaling is one `POST /api/offer` (the small-webrtc prebuilt UI, mounted at /,
 posts here). ICE is STUN-only — add TURN only if media fails through ngrok.
@@ -37,10 +38,16 @@ from pipecat.transports.smallwebrtc.connection import SmallWebRTCConnection
 from pipecat.transports.smallwebrtc.transport import SmallWebRTCTransport
 
 from stt_nemotron import NemotronSTTService
+from tts_kyutai import KyutaiTTSService
 
 HOST = os.environ.get("GATEWAY_HOST", "0.0.0.0")
 PORT = int(os.environ.get("GATEWAY_PORT", "8080"))
 STT_LANG = os.environ.get("STT_LANG", "en-US")
+
+# TTS: WS URL of tts_server.py (same node in the launcher). Set TTS_WS_URL=off
+# to run text-only (Phase-1b behavior — bot replies appear in the log only).
+TTS_WS_URL = os.environ.get("TTS_WS_URL", "ws://127.0.0.1:8089")
+TTS_ENABLED = TTS_WS_URL.lower() not in ("", "off", "0", "none")
 
 # Brain: the Qwen orchestrator served by vLLM (OpenAI-compatible). In the
 # launcher it's on the same node at :8001; vLLM ignores the api_key.
@@ -101,8 +108,8 @@ class TranscriptLogger(FrameProcessor):
 
 class BotLogger(FrameProcessor):
     """Accumulates the brain's streamed text and prints the full reply on
-    response end (placed after the LLM). Until TTS lands, this is how we see the
-    bot 'talk'. TranscriptionFrame subclasses TextFrame, so exclude it."""
+    response end (placed between the LLM and TTS — frames pass through).
+    TranscriptionFrame subclasses TextFrame, so exclude it."""
 
     def __init__(self):
         super().__init__()
@@ -146,18 +153,24 @@ async def _run_bot(connection: SmallWebRTCConnection):
     context = LLMContext(messages=[{"role": "system", "content": PERSONA}])
     agg = LLMContextAggregatorPair(context)
 
-    # caller mic -> STT -> (log) -> user-context -> brain -> (log) -> out -> assistant-context
-    # allow_interruptions=True gives barge-in once TTS is producing audio.
-    pipeline = Pipeline([
+    # caller mic -> STT -> (log) -> user-context -> brain -> (log) -> TTS -> out
+    # -> assistant-context. allow_interruptions=True + the interruptible TTS
+    # service give barge-in: caller speech cuts playback AND aborts generation.
+    procs = [
         transport.input(),
         stt,
         TranscriptLogger(),
         agg.user(),
         llm,
         BotLogger(),
+    ]
+    if TTS_ENABLED:
+        procs.append(KyutaiTTSService(url=TTS_WS_URL))
+    procs += [
         transport.output(),
         agg.assistant(),
-    ])
+    ]
+    pipeline = Pipeline(procs)
     task = PipelineTask(pipeline, params=PipelineParams(allow_interruptions=True))
     runner = PipelineRunner(handle_sigint=False)
     await runner.run(task)
@@ -242,5 +255,6 @@ async def index():
 if __name__ == "__main__":
     import uvicorn
 
-    print(f"[gateway] starting on {HOST}:{PORT} (STT lang={STT_LANG})", flush=True)
+    tts_info = TTS_WS_URL if TTS_ENABLED else "DISABLED (text-only)"
+    print(f"[gateway] starting on {HOST}:{PORT} (STT lang={STT_LANG}, TTS {tts_info})", flush=True)
     uvicorn.run(app, host=HOST, port=PORT)

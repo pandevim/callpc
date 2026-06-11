@@ -301,13 +301,17 @@ def check_vllm(args):
 
 
 def check_tts(args):
-    """Probe the Kyutai TTS server (HTTP root or WS port reachable)."""
+    """Probe the Kyutai TTS server: /health answers 200 only after the model is
+    loaded + warmup synthesis ran (gateway/tts_server.py serves it on the WS port)."""
     url = os.environ.get("TTS_URL", "http://127.0.0.1:8089")
     host, port = _hostport(url, 8089)
     if not _tcp_open(host, port):
-        return SKIP, f"TTS port {host}:{port} closed (start moshi server)"
-    # don't assume the route shape; a reachable port is the smoke signal here.
-    return PASS, f"TTS port {host}:{port} open"
+        return SKIP, f"TTS port {host}:{port} closed (start tts_server.py / moshi job)"
+    try:
+        code, body = _http(f"http://{host}:{port}/health", timeout=4)
+        return PASS, f"TTS healthy at {host}:{port} ({body.decode().strip()})"
+    except Exception as e:
+        return FAIL, f"TTS port open but /health failed ({type(e).__name__}) — still loading or wrong service?"
 
 
 def check_asr_ws(args):
