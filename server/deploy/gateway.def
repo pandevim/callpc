@@ -10,12 +10,17 @@ From: pytorch/pytorch:2.5.1-cuda12.4-cudnn9-runtime
 # Built once by deploy/build_images.sbatch (compute node).
 
 %post
+    # Install pipecat etc FIRST. pipecat[silero] depends on CPU `onnxruntime`,
+    # which shares the import name with onnxruntime-gpu and clobbers it (build #1
+    # ended up CPU-only). So install it now, then force the GPU build to win.
     pip install --no-cache-dir \
         "pipecat-ai[webrtc,silero]" \
         pipecat-ai-small-webrtc-prebuilt \
-        onnxruntime-gpu \
         sentencepiece soundfile numpy msgpack \
         fastapi "uvicorn[standard]"
+    # Make onnxruntime-gpu the sole/final onnxruntime (else ASR runs on CPU).
+    pip uninstall -y onnxruntime onnxruntime-gpu || true
+    pip install --no-cache-dir onnxruntime-gpu
     # CUDA-12 runtime libs for onnxruntime-gpu's CUDA EP (cublasLt/cudnn/etc).
     pip install --no-cache-dir \
         nvidia-cuda-runtime-cu12 nvidia-cublas-cu12 nvidia-cudnn-cu12 \
@@ -28,10 +33,12 @@ From: pytorch/pytorch:2.5.1-cuda12.4-cudnn9-runtime
     export LD_LIBRARY_PATH="$(ls -d /opt/conda/lib/python*/site-packages/nvidia/*/lib 2>/dev/null | tr '\n' ':')/usr/local/cuda/lib64:${LD_LIBRARY_PATH:-}"
 
 %test
-    # Fail the build early if the core imports or the CUDA EP aren't there.
+    # Fail the build if core imports are missing OR onnxruntime-gpu lost to the
+    # CPU build (no CUDAExecutionProvider). This catches the silero clobber.
     python -c "import pipecat, fastapi, onnxruntime as ort, sentencepiece; \
-print('providers', ort.get_available_providers()); \
-print('gateway image imports OK')"
+provs = ort.get_available_providers(); print('providers', provs); \
+assert 'CUDAExecutionProvider' in provs, 'onnxruntime-gpu NOT installed (CPU build won)'; \
+print('gateway image imports OK + CUDA EP present')"
 
 %runscript
     # `apptainer run gateway.sif <script.py> [args]` -> python <script.py> [args]
