@@ -51,3 +51,6 @@ apptainer_tmp/
 *.swp
 .idea/
 .vscode/
+
+# --- control hub state (device tokens) ---
+server/.state/

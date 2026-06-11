@@ -13,6 +13,7 @@ already staged it).
 """
 import json
 import os
+import sys
 
 from aiortc import RTCIceServer
 from fastapi import BackgroundTasks, FastAPI
@@ -41,6 +42,10 @@ from pipecat.transports.smallwebrtc.transport import SmallWebRTCTransport
 
 from stt_nemotron import NemotronSTTService
 from tts_kyutai import KyutaiTTSService
+
+# control hub (Phase 2) lives in server/control — one dir up
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from control.hub import router as control_router  # noqa: E402
 
 HOST = os.environ.get("GATEWAY_HOST", "0.0.0.0")
 PORT = int(os.environ.get("GATEWAY_PORT", "8080"))
@@ -97,6 +102,7 @@ app = FastAPI()
 # Research prototype — same posture as the rest of the public exposure.
 app.add_middleware(CORSMiddleware, allow_origins=["*"],
                    allow_methods=["*"], allow_headers=["*"])
+app.include_router(control_router)  # /control/ws + /api/pair|devices|control/*
 _connections: dict[str, SmallWebRTCConnection] = {}  # pc_id -> connection
 _tasks: dict[str, PipelineTask] = {}                  # pc_id -> running pipeline
 
