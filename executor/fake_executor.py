@@ -82,6 +82,12 @@ async def run(url: str, code: str | None):
     from websockets.asyncio.client import connect
 
     conf = load_conf()
+    if code and conf.get("token"):
+        # already paired — a reconnect must NOT replay the (single-use) code:
+        # seen live, a job restart mid-session led to "bad pair code" + exit.
+        _log("[exec] token already stored — ignoring --code (delete "
+             f"{CONF_PATH} to re-pair)")
+        code = None
     info = {
         "name": socket.gethostname(),
         "os": {"Darwin": "macos", "Windows": "windows"}.get(platform.system(), "linux"),
