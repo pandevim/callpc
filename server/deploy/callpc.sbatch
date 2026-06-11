@@ -47,13 +47,13 @@ GATEWAY_PORT=${GATEWAY_PORT:-8080}
 # + KV went negative -> 16k ctx needed 0.50. Qwen3.5-9B is a HYBRID GDN
 # (mamba) + vision model: FP8 weights ~10.8 GB plus a mamba-state cache AND a
 # vision-encoder cache, so at 0.26 KV went negative too -> needs 0.32 + 8k ctx.
-# FULL-STACK budget (Phase 2+): uitars 0.46@8k (~20.7) + brain 0.30 (~13.5)
-# + TTS(~5) + in-gateway ASR(~3.4) ≈ 42.6/45 GB. The 8k ctx bounds the task
-# runner to ~3 screenshots of history (1280x800 ≈ 1.3k tokens each). If
-# vllm-uitars fails with a negative-KV error, raise UITARS_UTIL and drop
-# BRAIN_MAXLEN to 4096. Verify with `preflight.py vram`.
+# FULL-STACK budget (Phase 2+): uitars 0.46@8k (~20.7, started OK) + brain
+# 0.32 (~14.4) + TTS(~5) + in-gateway ASR(~3.4) ≈ 43.5/45 GB — thin but real.
+# Brain 0.32 is a hard floor at 8k ctx: 0.30 left only 0.18 GiB KV (needs
+# 0.31; vLLM estimated max len 4224) — measured on job 1083578. If the TTS
+# or ASR can't allocate at the end, drop UITARS_UTIL=0.44 first.
 UITARS_UTIL=${UITARS_UTIL:-0.46};  UITARS_MAXLEN=${UITARS_MAXLEN:-8192}
-BRAIN_UTIL=${BRAIN_UTIL:-0.30};    BRAIN_MAXLEN=${BRAIN_MAXLEN:-8192}
+BRAIN_UTIL=${BRAIN_UTIL:-0.32};    BRAIN_MAXLEN=${BRAIN_MAXLEN:-8192}
 
 # Service toggles. Defaults = full Phase-2 stack. ASR stays 0: STT runs
 # in-process inside the gateway (the standalone block below is the alternative).
