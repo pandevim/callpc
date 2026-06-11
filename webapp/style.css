@@ -95,6 +95,24 @@ body {
 
 .hint { color: #93a0b8; font-size: .85rem; }
 
+/* ---------- push-to-talk ---------- */
+.ptt {
+  border: none; border-radius: 40px;
+  padding: 22px 48px;
+  font-family: inherit; font-size: 1.05rem; font-weight: 600;
+  color: #eef1f7;
+  background: linear-gradient(160deg, #3a4565, #252e4a);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, .4);
+  cursor: pointer;
+  user-select: none; -webkit-user-select: none; touch-action: none;
+  transition: transform .1s ease, background .15s ease;
+}
+.ptt.live {
+  background: linear-gradient(160deg, #34d97b, #1faf5b);
+  transform: scale(1.05);
+}
+.ptt.hidden { visibility: hidden; }  /* hands-free: keep the layout, hide the pill */
+
 /* ---------- caller mic level (you talking / stopped) ---------- */
 .mic-viz {
   display: flex; align-items: center; justify-content: center;

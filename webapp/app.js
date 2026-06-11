@@ -26,10 +26,11 @@ const screens = {
 let pc = null;          // RTCPeerConnection
 let micStream = null;   // raw mic (kept for teardown)
 let sendStream = null;  // mic -> gain -> destination; what we actually send
-let micGain = null;     // mute = gain 0 (NOT track.enabled=false: that thins the
-                        // RTP flow and the server's idle watcher kills the
-                        // receiver — unmute after ~10 s went silent until redial)
-let muted = false;
+let micGain = null;     // mic gating = gain 0/1 (NOT track.enabled=false: that
+                        // thins the RTP flow and the server's idle watcher kills
+                        // the receiver — unmute after ~10 s went silent until redial)
+let pttMode = true;     // default: push-to-talk; toggleable to hands-free
+let pttLive = false;    // true while the PTT button is held
 let timerStart = 0;
 let timerHandle = null;
 let talkingHandle = null;
@@ -178,7 +179,8 @@ async function startCall() {
         stopRingtone();
         show("call");
         startTimer();
-        if (sendStream) watchMicAudio(sendStream);  // post-gain: bars flatten on mute
+        applyMicState();  // PTT default: mic gated closed until held
+        if (sendStream) watchMicAudio(sendStream);  // post-gain: bars follow the gate
       } else if (["failed", "disconnected", "closed"].includes(pc.connectionState)) {
         if (screens.call.classList.contains("active") || screens.ringing.classList.contains("active")) {
           endCall("Call ended", pc.connectionState === "failed" ? "connection failed" : "");
@@ -222,9 +224,7 @@ function teardown() {
   if (micStream) { micStream.getTracks().forEach((t) => t.stop()); micStream = null; }
   sendStream = null;
   micGain = null;
-  $("remote").srcObject = null;
-  muted = false;
-  syncMuteUi();
+  pttLive = false;  // mode itself persists across calls
 }
 
 function endCall(title, detail) {
@@ -234,26 +234,42 @@ function endCall(title, detail) {
   show("ended");
 }
 
-// ---------- mute ----------
-function syncMuteUi() {
-  $("ic-mic").style.display = muted ? "none" : "";
-  $("ic-mic-off").style.display = muted ? "" : "none";
-  $("mute-hint").textContent = muted ? "unmute" : "mute";
-  $("btn-mute").classList.toggle("engaged", muted);
-}
-function toggleMute() {
-  muted = !muted;
+// ---------- mic gating: push-to-talk (default) / hands-free ----------
+function applyMicState() {
+  const live = pttMode ? pttLive : true;
   if (micGain) {
-    // quick fade avoids a click; stream keeps flowing (silence) so the
+    // quick fade avoids a click; the stream keeps flowing (silence) so the
     // server-side receiver never idles out
-    micGain.gain.setTargetAtTime(muted ? 0 : 1, actx().currentTime, 0.02);
+    micGain.gain.setTargetAtTime(live ? 1 : 0, actx().currentTime, 0.02);
   }
-  syncMuteUi();
+  $("btn-ptt").classList.toggle("hidden", !pttMode);
+  $("btn-ptt").classList.toggle("live", pttMode && pttLive);
+  $("ic-mic").style.display = pttMode ? "none" : "";       // hands-free: open mic icon
+  $("ic-mic-off").style.display = pttMode ? "" : "none";   // PTT: mic gated icon
+  $("mode-hint").textContent = pttMode ? "hands-free" : "push to talk";
+  $("btn-mode").classList.toggle("engaged", !pttMode);
 }
+
+const _ptt = $("btn-ptt");
+_ptt.addEventListener("pointerdown", (e) => {
+  e.preventDefault();
+  try { _ptt.setPointerCapture(e.pointerId); } catch (_) {}
+  pttLive = true;
+  applyMicState();
+});
+for (const ev of ["pointerup", "pointercancel"]) {
+  _ptt.addEventListener(ev, () => { pttLive = false; applyMicState(); });
+}
+_ptt.addEventListener("contextmenu", (e) => e.preventDefault());  // mobile long-press
+
+$("btn-mode").onclick = () => {
+  pttMode = !pttMode;
+  pttLive = false;
+  applyMicState();
+};
 
 // ---------- wire up ----------
 $("btn-call").onclick = startCall;
 $("btn-again").onclick = startCall;
 $("btn-cancel").onclick = () => endCall("Call cancelled", "");
 $("btn-hangup").onclick = () => endCall("Call ended", "");
-$("btn-mute").onclick = toggleMute;
