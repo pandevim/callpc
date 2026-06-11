@@ -51,8 +51,13 @@ async def main() -> int:
                 if ttfa is None:
                     ttfa = time.monotonic() - t0
                 chunks.append(bytes(msg))
-            elif json.loads(msg).get("type") == "end":
+                continue
+            ctl = json.loads(msg)
+            if ctl.get("type") == "end":
                 break
+            if ctl.get("type") == "error":
+                print(f"FAIL: server error: {ctl.get('error')}", file=sys.stderr)
+                return 1
         total = time.monotonic() - t0
 
     if not chunks:

@@ -42,6 +42,7 @@ from dataclasses import dataclass
 
 import numpy as np
 import torch
+from websockets.exceptions import ConnectionClosed
 
 from moshi.conditioners import dropout_all_conditions
 from moshi.models.lm import LMGen
@@ -153,7 +154,11 @@ class TTSGen:
             cfg_is_masked_until=None,
             cfg_is_no_text=True,
         )
-        self.lm_gen.streaming_forever(1)
+        # DEVIATION from the vendored script: no streaming_forever(1) here. It
+        # enters streaming on the SHARED lm module and never exits, so the next
+        # utterance's fresh TTSGen asserts "<module> is already streaming!".
+        # The caller wraps the step loop in `with lm_gen.streaming(1)` instead
+        # (per-utterance enter/exit, unwinds on errors/barge-in too).
 
     def process_last(self):
         while len(self.state.entries) > 0 or self.state.end_step is not None:
@@ -229,10 +234,12 @@ class KyutaiEngine:
                 n_frames += 1
 
         # Fresh TTSGen per utterance: conditioning + the text state machine are
-        # baked in at construction (and its LMGen enters streaming permanently).
+        # baked in at construction. Streaming state (LM + mimi decoder) is
+        # entered HERE and exited at the end of the with-block — leaving it
+        # entered would break the next utterance (see note in __post_init__).
         gen = TTSGen(self.model, [attrs], on_frame=_on_frame)
         try:
-            with self.model.mimi.streaming(1):
+            with gen.lm_gen.streaming(1), self.model.mimi.streaming(1):
                 for text in texts:
                     for entry in _prepare_script(self.model, text, first_turn=True):
                         gen.append_entry(entry)
@@ -285,12 +292,20 @@ async def main() -> int:
                     await ws.send(chunk)
                 await fut  # surface engine errors
                 await ws.send(json.dumps({"type": "end"}))
-            except BaseException:
+            except BaseException as e:
                 cancelled.set()  # stop the GPU loop on disconnect/cancel
                 try:
                     await fut
                 except Exception:
                     pass
+                if not isinstance(e, ConnectionClosed):
+                    # engine error with the socket still up — tell the client
+                    # before the connection drops (selftest/gateway print it)
+                    try:
+                        await ws.send(json.dumps(
+                            {"type": "error", "error": f"{type(e).__name__}: {e}"}))
+                    except Exception:
+                        pass
                 raise
 
     async def handler(ws):
@@ -322,8 +337,12 @@ async def main() -> int:
                     else:
                         await ws.send(json.dumps({"type": "end"}))
                     texts = []
-        except Exception as e:  # noqa: BLE001 — disconnects are routine (barge-in)
-            _log(f"[tts] connection ended: {type(e).__name__}: {e}")
+        except ConnectionClosed as e:  # routine: barge-in / client hangup
+            _log(f"[tts] connection closed: {e}")
+        except Exception as e:  # noqa: BLE001 — real errors: full stack to the log
+            import traceback
+            traceback.print_exc(file=sys.stderr)
+            _log(f"[tts] connection ended on error: {type(e).__name__}: {e}")
 
     def _process_request(connection, request):
         # plain-HTTP health probe on the WS port (for curl / wait_for_http)
