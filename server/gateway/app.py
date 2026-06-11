@@ -98,6 +98,7 @@ app = FastAPI()
 app.add_middleware(CORSMiddleware, allow_origins=["*"],
                    allow_methods=["*"], allow_headers=["*"])
 _connections: dict[str, SmallWebRTCConnection] = {}  # pc_id -> connection
+_tasks: dict[str, PipelineTask] = {}                  # pc_id -> running pipeline
 
 
 class TranscriptLogger(FrameProcessor):
@@ -178,8 +179,40 @@ async def _run_bot(connection: SmallWebRTCConnection):
     ]
     pipeline = Pipeline(procs)
     task = PipelineTask(pipeline, params=PipelineParams(allow_interruptions=True))
+
+    # Closing the CONNECTION does not stop the PIPELINE: without this, every
+    # reload left a zombie pipeline running on a dead transport (seen live —
+    # an old aggregator kept claiming user turns). Cancel the task whenever
+    # the client goes away; _cancel_call() does the same for last-caller-wins.
+    @transport.event_handler("on_client_disconnected")
+    async def _on_client_disconnected(t, client):
+        print(f"[gateway] client gone — cancelling pipeline for {connection.pc_id}", flush=True)
+        await task.cancel()
+
+    _tasks[connection.pc_id] = task
     runner = PipelineRunner(handle_sigint=False)
-    await runner.run(task)
+    try:
+        await runner.run(task)
+    finally:
+        _tasks.pop(connection.pc_id, None)
+        print(f"[gateway] pipeline finished for {connection.pc_id}", flush=True)
+
+
+async def _cancel_call(pc_id: str):
+    """Stop a call completely: pipeline first (STT/TTS shut down), then the
+    peer connection."""
+    task = _tasks.pop(pc_id, None)
+    if task:
+        try:
+            await task.cancel()
+        except Exception as e:  # noqa: BLE001
+            print(f"[gateway] error cancelling pipeline {pc_id}: {e}", flush=True)
+    conn = _connections.get(pc_id)
+    if conn:
+        try:
+            await conn.disconnect()
+        except Exception as e:  # noqa: BLE001
+            print(f"[gateway] error closing {pc_id}: {e}", flush=True)
 
 
 @app.get("/health")
@@ -203,15 +236,11 @@ async def offer(req: dict, background_tasks: BackgroundTasks):
                                restart_pc=req.get("restart_pc", False))
     else:
         # Last caller wins: this is a personal phone line, one call at a time.
-        # A page reload leaves the old pipeline running for many seconds (seen
-        # live: a zombie pipeline kept transcribing and crashed its STT on an
-        # empty VAD window) — tear down every existing call before answering.
-        for old in list(_connections.values()):
-            print(f"[gateway] closing previous call {old.pc_id} (new caller)", flush=True)
-            try:
-                await old.disconnect()
-            except Exception as e:  # noqa: BLE001
-                print(f"[gateway] error closing {old.pc_id}: {e}", flush=True)
+        # Tear down every existing call — pipeline AND connection — before
+        # answering (reloads otherwise leave zombie pipelines transcribing).
+        for old_id in list(_connections):
+            print(f"[gateway] closing previous call {old_id} (new caller)", flush=True)
+            await _cancel_call(old_id)
         conn = SmallWebRTCConnection(ice_servers=ICE_SERVERS)
         await conn.initialize(sdp=req["sdp"], type=req["type"])
 

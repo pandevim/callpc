@@ -35,6 +35,23 @@ sys.path.insert(0, _ASR_DIR)
 import onnx_engine  # noqa: E402
 
 
+# ONE engine per process, loaded lazily on the first call. The weights are
+# ~3.4 GB VRAM and ~4 s to load — per-call instances accumulated VRAM across
+# reconnects. ORT InferenceSession.run() is thread-safe; per-call state lives
+# in each service's own OnnxStreamingSession.
+_ENGINE: "onnx_engine.OnnxASR | None" = None
+
+
+def _get_engine(lang: str, model_dir: str | None):
+    global _ENGINE
+    if _ENGINE is None:
+        kw = {"lang": lang}
+        if model_dir:
+            kw["model_dir"] = model_dir
+        _ENGINE = onnx_engine.OnnxASR(**kw)
+    return _ENGINE
+
+
 class NemotronSTTService(STTService):
     """Streaming STT over the ONNX Nemotron engine. One session per service
     instance (one caller at a time — matches the single-GPU engine)."""
@@ -46,10 +63,7 @@ class NemotronSTTService(STTService):
         super().__init__(sample_rate=self.SAMPLE_RATE, **kwargs)
         self._lang = lang
         self._user_id = user_id
-        kw = {"lang": lang}
-        if model_dir:
-            kw["model_dir"] = model_dir
-        self._asr = onnx_engine.OnnxASR(**kw)
+        self._asr = _get_engine(lang, model_dir)
 
         # Guard against a silent CPU fallback: get_providers() reflects the
         # provider actually ACTIVE on the session (CUDA drops off here if its
