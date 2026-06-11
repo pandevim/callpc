@@ -131,7 +131,18 @@ async def _run_bot(connection: SmallWebRTCConnection):
         ),
     )
     stt = NemotronSTTService(lang=STT_LANG)
-    llm = OpenAILLMService(api_key=BRAIN_API_KEY, base_url=BRAIN_BASE_URL, model=BRAIN_MODEL)
+    # Qwen3.5 has thinking mode ON by default — it streams its whole chain-of-
+    # thought as the reply (slow, and we'd speak the reasoning). Disable it via
+    # vLLM's chat_template_kwargs, passed through OpenAI extra_body. Settings(...)
+    # is also the non-deprecated way to set the model.
+    llm = OpenAILLMService(
+        api_key=BRAIN_API_KEY,
+        base_url=BRAIN_BASE_URL,
+        settings=OpenAILLMService.Settings(
+            model=BRAIN_MODEL,
+            extra={"extra_body": {"chat_template_kwargs": {"enable_thinking": False}}},
+        ),
+    )
     context = LLMContext(messages=[{"role": "system", "content": PERSONA}])
     agg = LLMContextAggregatorPair(context)
 
