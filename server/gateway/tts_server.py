@@ -207,6 +207,9 @@ class KyutaiEngine:
             _log(f"[tts] voice loaded: {voice}")
         return self._attrs[voice]
 
+    @torch.no_grad()  # TTSModel.generate() has this built in; our TTSGen step
+    # loop runs outside it, and mimi.decode() output would otherwise carry a
+    # grad graph (".numpy() on Tensor that requires grad").
     def synthesize(self, texts: list[str], voice: str,
                    emit: tp.Callable[[bytes], None],
                    cancelled: threading.Event) -> int:
