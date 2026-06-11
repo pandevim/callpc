@@ -24,7 +24,11 @@ const screens = {
 };
 
 let pc = null;          // RTCPeerConnection
-let micStream = null;
+let micStream = null;   // raw mic (kept for teardown)
+let sendStream = null;  // mic -> gain -> destination; what we actually send
+let micGain = null;     // mute = gain 0 (NOT track.enabled=false: that thins the
+                        // RTP flow and the server's idle watcher kills the
+                        // receiver — unmute after ~10 s went silent until redial)
 let muted = false;
 let timerStart = 0;
 let timerHandle = null;
@@ -154,8 +158,16 @@ async function startCall() {
   setRingStatus("calling…");
   startRingtone();  // the call tap is the user gesture WebAudio needs
   try {
+    const c = actx();
+    const src = c.createMediaStreamSource(micStream);
+    micGain = c.createGain();
+    const dest = c.createMediaStreamDestination();
+    src.connect(micGain);
+    micGain.connect(dest);
+    sendStream = dest.stream;
+
     pc = new RTCPeerConnection({ iceServers: await iceServers() });
-    micStream.getTracks().forEach((t) => pc.addTrack(t, micStream));
+    sendStream.getTracks().forEach((t) => pc.addTrack(t, sendStream));
     pc.ontrack = (e) => {
       $("remote").srcObject = e.streams[0];
       watchRemoteAudio(e.streams[0]);
@@ -166,7 +178,7 @@ async function startCall() {
         stopRingtone();
         show("call");
         startTimer();
-        if (micStream) watchMicAudio(micStream);
+        if (sendStream) watchMicAudio(sendStream);  // post-gain: bars flatten on mute
       } else if (["failed", "disconnected", "closed"].includes(pc.connectionState)) {
         if (screens.call.classList.contains("active") || screens.ringing.classList.contains("active")) {
           endCall("Call ended", pc.connectionState === "failed" ? "connection failed" : "");
@@ -208,6 +220,8 @@ function teardown() {
   micVizHandle = null;
   if (pc) { try { pc.close(); } catch (_) {} pc = null; }
   if (micStream) { micStream.getTracks().forEach((t) => t.stop()); micStream = null; }
+  sendStream = null;
+  micGain = null;
   $("remote").srcObject = null;
   muted = false;
   syncMuteUi();
@@ -229,7 +243,11 @@ function syncMuteUi() {
 }
 function toggleMute() {
   muted = !muted;
-  if (micStream) micStream.getAudioTracks().forEach((t) => (t.enabled = !muted));
+  if (micGain) {
+    // quick fade avoids a click; stream keeps flowing (silence) so the
+    // server-side receiver never idles out
+    micGain.gain.setTargetAtTime(muted ? 0 : 1, actx().currentTime, 0.02);
+  }
   syncMuteUi();
 }
 
