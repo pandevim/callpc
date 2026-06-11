@@ -102,10 +102,14 @@ async def offer(req: dict, background_tasks: BackgroundTasks):
 
 # Mount the prebuilt dev UI at / if installed (open the ngrok URL in a browser to
 # call in). Defined AFTER the routes above so /health and /api/offer take priority.
+# SmallWebRTCPrebuiltUI is exported as an ASGI-app INSTANCE (a StaticFiles), so
+# mount it directly — don't call it. Handle either instance or class defensively.
 try:
     from pipecat_ai_small_webrtc_prebuilt.frontend import SmallWebRTCPrebuiltUI
 
-    app.mount("/", SmallWebRTCPrebuiltUI(), name="prebuilt")
+    _ui = SmallWebRTCPrebuiltUI() if isinstance(SmallWebRTCPrebuiltUI, type) else SmallWebRTCPrebuiltUI
+    app.mount("/", _ui, name="prebuilt")
+    print("[gateway] prebuilt UI mounted at /", flush=True)
 except Exception as e:  # noqa: BLE001
     print(f"[gateway] prebuilt UI not mounted ({e}); /api/offer still works", flush=True)
 
