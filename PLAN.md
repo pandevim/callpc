@@ -137,6 +137,26 @@ The L40S is reached through a **SLURM batch cluster** (university HPC), not a pe
 
 **Phase 4 — polish:** call UI sounds/animations, auth hardening (per-device tokens), transcript + screenshot-trail logging for every task, executor login-launch toggle, macOS notarization + Windows code-signing, and (if moving off the cluster) a persistent always-on host so calls don't need a live sbatch job + tunnel.
 
+## Build status (updated 2026-06-11, Stevens `jarvis` HPC)
+
+**Done & verified on the real L40S:**
+
+- **Phase 0 ✅** — Apptainer images build + run with `--nv` GPU passthrough; vendored ASR loads on GPU (RTF ~0.2, ~0.9 GB host RSS); STUN UDP egress confirmed. Harness: `server/preflight.py` via `server/deploy/preflight.sbatch`.
+- **Two-vLLM core ✅** — `callpc.sbatch` brings up UI-TARS + Qwen brain co-resident in VRAM-order with health gating + cleanup trap. Measured **35.3 / 45 GB** used, ~10 GB free (fits the remaining TTS+ASR).
+- **Phase 1a ✅** — voice gateway: browser WebRTC call → Nemotron STT in-process on the L40S → live interim/final transcripts.
+- **Phase 1b ✅** — Qwen brain wired into the pipeline (STT → context → LLM → reply), phone persona, multi-turn context. Conversational replies working.
+
+**Remaining in Phase 1:** Kyutai **TTS** (so it speaks back) + barge-in tuning; then the custom phone-call webapp (currently a minimal built-in test page).
+
+**Concrete deltas from the pre-build research (use these, not the original guesses):**
+
+- **Runtime = Apptainer, not venv** (NeuralSINDy_v2 layout). Three images under `server/deploy/`: `vllm.sif` (official, CUDA 13), `moshi.sif`, and **`gateway.sif` (CUDA-12 base on purpose** — so onnxruntime-gpu's CUDA EP loads without lib-juggling; the vLLM image's CUDA 13 can't host onnxruntime-gpu).
+- **Brain model: `Qwen/Qwen3.5-9B` + `--quantization fp8`** — no official 9B FP8 repo exists, and Qwen3 dropped the `-Instruct` suffix. It's a **hybrid GDN (mamba) + vision** model, so it needs more non-weight VRAM than a plain dense 9B → run at `--gpu-memory-utilization 0.32 --max-model-len 8192`. **Thinking mode OFF** (`chat_template_kwargs.enable_thinking=false`) — on by default it dumps the whole CoT (~90 s); off gives crisp 1–2 sentence replies. Needs vLLM ≥0.17 (GDN arch). UI-TARS runs at `0.50 / 16384`.
+- **vLLM image entrypoint is `vllm serve`** — pass the model as a positional arg (`--model` deprecated); JSON flags like `--limit-mm-per-prompt` get quote-mangled through `apptainer run` (use dot-syntax or set per-request).
+- **WebRTC media needs TURN** — the cluster NAT blocks direct/STUN media (signaling alone works through the tunnel). Env `TURN_URL/USER/PASS` (free metered.ca) wired into both browser + aiortc.
+- **Reachability for dev:** SSH tunnel `jarvis -f -N -L <port>:<node>:<port>` + open `http://localhost:<port>` (localhost = secure context for the mic); ngrok only needed to call from a phone.
+- **Pipecat 1.3** specifics: gateway uses the universal `LLMContext` + `LLMContextAggregatorPair` (not the removed `OpenAILLMContext`); image needs `opencv-python-headless` (not full opencv), `onnxruntime-gpu` forced over the CPU build that `pipecat[silero]` pulls, and NLTK `punkt_tab` baked in (read-only container fs).
+
 ## Verification
 
 - Per-service smoke tests in Phase 0 (each model service has a standalone test script).
