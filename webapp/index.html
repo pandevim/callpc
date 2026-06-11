@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0b0f1a">
+  <title>callpc</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main id="phone">
+
+    <!-- ============ idle / dial screen ============ -->
+    <section id="screen-idle" class="screen active">
+      <div class="callee">
+        <div class="avatar"><span>💻</span></div>
+        <h1>My Computer</h1>
+        <p class="sub">callpc · voice control</p>
+      </div>
+      <div class="actions">
+        <button id="btn-call" class="round green" aria-label="Call">
+          <svg viewBox="0 0 24 24"><path d="M6.6 10.8c1.4 2.8 3.8 5.1 6.6 6.6l2.2-2.2c.3-.3.7-.4 1-.2 1.1.4 2.3.6 3.6.6.6 0 1 .4 1 1V20c0 .6-.4 1-1 1C10.6 21 3 13.4 3 4c0-.6.4-1 1-1h3.5c.6 0 1 .4 1 1 0 1.2.2 2.4.6 3.6.1.3 0 .7-.2 1l-2.3 2.2z"/></svg>
+        </button>
+        <span class="hint">call</span>
+      </div>
+    </section>
+
+    <!-- ============ ringing screen ============ -->
+    <section id="screen-ringing" class="screen">
+      <div class="callee">
+        <div class="avatar ringing"><span>💻</span><i></i><i></i><i></i></div>
+        <h1>My Computer</h1>
+        <p class="sub" id="ring-status">calling…</p>
+      </div>
+      <div class="actions">
+        <button id="btn-cancel" class="round red" aria-label="Cancel">
+          <svg viewBox="0 0 24 24"><path d="M6.6 10.8c1.4 2.8 3.8 5.1 6.6 6.6l2.2-2.2c.3-.3.7-.4 1-.2 1.1.4 2.3.6 3.6.6.6 0 1 .4 1 1V20c0 .6-.4 1-1 1C10.6 21 3 13.4 3 4c0-.6.4-1 1-1h3.5c.6 0 1 .4 1 1 0 1.2.2 2.4.6 3.6.1.3 0 .7-.2 1l-2.3 2.2z"/></svg>
+        </button>
+        <span class="hint">cancel</span>
+      </div>
+    </section>
+
+    <!-- ============ in-call screen ============ -->
+    <section id="screen-call" class="screen">
+      <div class="callee">
+        <div class="avatar oncall" id="call-avatar"><span>💻</span></div>
+        <h1>My Computer</h1>
+        <p class="sub timer" id="timer">00:00</p>
+      </div>
+      <div class="actions row">
+        <div class="action">
+          <button id="btn-mute" class="round dark" aria-label="Mute">
+            <svg id="ic-mic" viewBox="0 0 24 24"><path d="M12 14a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-3.08A7 7 0 0 0 19 11h-2z"/></svg>
+            <svg id="ic-mic-off" viewBox="0 0 24 24" style="display:none"><path d="M19 11h-2a5 5 0 0 1-.7 2.6l1.5 1.5A7 7 0 0 0 19 11zM4.3 3 3 4.3l6 6V11a3 3 0 0 0 4.2 2.7l1.6 1.6A5 5 0 0 1 7 11H5a7 7 0 0 0 6 6.9V21h2v-3.1c.9-.1 1.8-.5 2.6-1l3.1 3.1 1.3-1.3L4.3 3zM15 11V5a3 3 0 0 0-6 0v.3l6 6z"/></svg>
+          </button>
+          <span class="hint" id="mute-hint">mute</span>
+        </div>
+        <div class="action">
+          <button id="btn-hangup" class="round red" aria-label="Hang up">
+            <svg viewBox="0 0 24 24"><path d="M12 9c-1.6 0-3.1.2-4.6.7v3.1c0 .4-.2.8-.6.9-.9.5-1.8 1-2.5 1.7-.2.2-.4.3-.7.3-.3 0-.5-.1-.7-.3L.4 12.9c-.2-.2-.4-.4-.4-.7 0-.3.1-.5.3-.7C3.3 8.8 7.5 7 12 7s8.7 1.8 11.7 4.5c.2.2.3.4.3.7 0 .3-.1.5-.3.7l-2.5 2.5c-.2.2-.4.3-.7.3-.3 0-.5-.1-.7-.3-.8-.7-1.6-1.3-2.5-1.7-.4-.2-.6-.5-.6-.9V9.7C15.1 9.2 13.6 9 12 9z"/></svg>
+          </button>
+          <span class="hint">end</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ ended / error screen ============ -->
+    <section id="screen-ended" class="screen">
+      <div class="callee">
+        <div class="avatar ended"><span>💻</span></div>
+        <h1 id="ended-title">Call ended</h1>
+        <p class="sub" id="ended-detail"></p>
+      </div>
+      <div class="actions">
+        <button id="btn-again" class="round green" aria-label="Call again">
+          <svg viewBox="0 0 24 24"><path d="M6.6 10.8c1.4 2.8 3.8 5.1 6.6 6.6l2.2-2.2c.3-.3.7-.4 1-.2 1.1.4 2.3.6 3.6.6.6 0 1 .4 1 1V20c0 .6-.4 1-1 1C10.6 21 3 13.4 3 4c0-.6.4-1 1-1h3.5c.6 0 1 .4 1 1 0 1.2.2 2.4.6 3.6.1.3 0 .7-.2 1l-2.3 2.2z"/></svg>
+        </button>
+        <span class="hint">call again</span>
+      </div>
+    </section>
+
+  </main>
+  <audio id="remote" autoplay playsinline></audio>
+  <script src="app.js"></script>
+</body>
+</html>

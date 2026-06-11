@@ -16,7 +16,9 @@ import os
 
 from aiortc import RTCIceServer
 from fastapi import BackgroundTasks, FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.frames.frames import (
@@ -91,6 +93,10 @@ ICE_SERVERS = [RTCIceServer(**s) for s in ICE_CONFIG]        # -> aiortc (server
 print(f"[gateway] ICE servers: {[s['urls'] for s in ICE_CONFIG]}", flush=True)
 
 app = FastAPI()
+# CORS so the webapp can also be hosted statically (Vercel + ?api=<ngrok URL>).
+# Research prototype — same posture as the rest of the public exposure.
+app.add_middleware(CORSMiddleware, allow_origins=["*"],
+                   allow_methods=["*"], allow_headers=["*"])
 _connections: dict[str, SmallWebRTCConnection] = {}  # pc_id -> connection
 
 
@@ -181,6 +187,12 @@ async def health():
     return {"status": "ok", "service": "callpc-gateway", "active_calls": len(_connections)}
 
 
+@app.get("/api/config")
+async def api_config():
+    """Client bootstrap: ICE servers (incl. TURN creds when configured)."""
+    return {"ice_servers": ICE_CONFIG}
+
+
 @app.post("/api/offer")
 async def offer(req: dict, background_tasks: BackgroundTasks):
     """WebRTC signaling: reuse an existing pc_id (renegotiate) or start a new call."""
@@ -215,11 +227,12 @@ async def offer(req: dict, background_tasks: BackgroundTasks):
     return JSONResponse(conn.get_answer())
 
 
-# Minimal self-contained test page. The pipecat prebuilt UI is an RTVI client
-# that POSTs to /start with its own handshake — incompatible with our raw
-# /api/offer SDP endpoint. This page does standard WebRTC offer/answer directly
-# against /api/offer (aiortc speaks vanilla WebRTC), so we control both ends.
-# The real phone-call UI ships separately (Vercel webapp) later.
+# Minimal self-contained test page (kept at /test for debugging). The pipecat
+# prebuilt UI is an RTVI client that POSTs to /start with its own handshake —
+# incompatible with our raw /api/offer SDP endpoint. This page does standard
+# WebRTC offer/answer directly against /api/offer (aiortc speaks vanilla
+# WebRTC), so we control both ends. The real phone-call UI is webapp/ (served
+# at / below when present).
 _CALL_UI = """<!doctype html><html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>callpc</title></head>
 <body style="font-family:system-ui;max-width:480px;margin:48px auto;text-align:center">
@@ -257,9 +270,23 @@ document.getElementById('go').onclick = async () => {
 </script></body></html>"""
 
 
-@app.get("/", response_class=HTMLResponse)
-async def index():
+@app.get("/test", response_class=HTMLResponse)
+async def test_page():
     return _CALL_UI.replace("__ICE_SERVERS__", json.dumps(ICE_CONFIG))
+
+
+# The phone-call webapp (repo/webapp, sibling of server/). Mounted at "/" LAST
+# so the API routes above keep precedence. Requires the container bind to cover
+# the repo root (deploy/_env.sh). Falls back to the test page when absent.
+_WEBAPP_DIR = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "webapp")
+if os.path.isdir(_WEBAPP_DIR):
+    app.mount("/", StaticFiles(directory=_WEBAPP_DIR, html=True), name="webapp")
+    print(f"[gateway] serving webapp from {_WEBAPP_DIR} (test page at /test)", flush=True)
+else:
+    @app.get("/", response_class=HTMLResponse)
+    async def index():
+        return _CALL_UI.replace("__ICE_SERVERS__", json.dumps(ICE_CONFIG))
 
 
 if __name__ == "__main__":

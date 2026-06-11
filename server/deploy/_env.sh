@@ -54,11 +54,13 @@ mkdir -p "$HF_HOME"
 # Bind list for `apptainer exec`/`run` ONLY — pass it explicitly with --bind.
 # Do NOT export APPTAINER_BIND: that var applies to `apptainer build`/`pull`
 # too, where binding fails (the dest doesn't exist in the half-built image).
-# We bind the repo at the same path; HF_HOME lives under it, so the container
-# reaches the HF cache via this one bind (no separate /root/.cache mount, which
-# would also need its dest to pre-exist). APPTAINERENV_HF_HOME makes the
-# container honour our HF_HOME path.
-export CALLPC_BIND="$SERVER_DIR:$SERVER_DIR"
+# We bind the REPO ROOT (server/ + webapp/ — the gateway serves webapp/ at /)
+# at the same path; HF_HOME lives under server/, so the container reaches the
+# HF cache via this one bind (no separate /root/.cache mount, which would also
+# need its dest to pre-exist). APPTAINERENV_HF_HOME makes the container honour
+# our HF_HOME path.
+export REPO_DIR="$(dirname "$SERVER_DIR")"
+export CALLPC_BIND="$REPO_DIR:$REPO_DIR"
 export APPTAINERENV_HF_HOME="$HF_HOME"
 
 # --- GPU sanity (no-op on the login node) ---
