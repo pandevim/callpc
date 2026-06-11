@@ -13,7 +13,7 @@ already staged it).
 import os
 
 from fastapi import BackgroundTasks, FastAPI
-from fastapi.responses import JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.frames.frames import Frame, InterimTranscriptionFrame, TranscriptionFrame
@@ -100,18 +100,51 @@ async def offer(req: dict, background_tasks: BackgroundTasks):
     return JSONResponse(conn.get_answer())
 
 
-# Mount the prebuilt dev UI at / if installed (open the ngrok URL in a browser to
-# call in). Defined AFTER the routes above so /health and /api/offer take priority.
-# SmallWebRTCPrebuiltUI is exported as an ASGI-app INSTANCE (a StaticFiles), so
-# mount it directly — don't call it. Handle either instance or class defensively.
-try:
-    from pipecat_ai_small_webrtc_prebuilt.frontend import SmallWebRTCPrebuiltUI
+# Minimal self-contained test page. The pipecat prebuilt UI is an RTVI client
+# that POSTs to /start with its own handshake — incompatible with our raw
+# /api/offer SDP endpoint. This page does standard WebRTC offer/answer directly
+# against /api/offer (aiortc speaks vanilla WebRTC), so we control both ends.
+# The real phone-call UI ships separately (Vercel webapp) later.
+_CALL_UI = """<!doctype html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>callpc</title></head>
+<body style="font-family:system-ui;max-width:480px;margin:48px auto;text-align:center">
+<h2>callpc &mdash; voice test</h2>
+<button id="go" style="font-size:18px;padding:12px 24px">Connect &amp; talk</button>
+<p id="status">idle</p>
+<audio id="remote" autoplay></audio>
+<script>
+const log = m => { document.getElementById('status').textContent = m; console.log(m); };
+document.getElementById('go').onclick = async () => {
+  try {
+    log('requesting mic...');
+    const stream = await navigator.mediaDevices.getUserMedia({audio:true, video:false});
+    const pc = new RTCPeerConnection({iceServers:[{urls:'stun:stun.l.google.com:19302'}]});
+    stream.getTracks().forEach(t => pc.addTrack(t, stream));
+    pc.ontrack = e => { document.getElementById('remote').srcObject = e.streams[0]; };
+    pc.onconnectionstatechange = () => log('peer: ' + pc.connectionState);
+    await pc.setLocalDescription(await pc.createOffer());
+    // non-trickle: wait for ICE gathering to finish before sending the offer
+    await new Promise(res => {
+      if (pc.iceGatheringState === 'complete') return res();
+      const t = setTimeout(res, 3000);
+      pc.addEventListener('icegatheringstatechange', () => {
+        if (pc.iceGatheringState === 'complete') { clearTimeout(t); res(); }
+      });
+    });
+    log('signaling...');
+    const r = await fetch('/api/offer', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({sdp: pc.localDescription.sdp, type: pc.localDescription.type})});
+    if (!r.ok) { log('offer rejected: HTTP ' + r.status); return; }
+    await pc.setRemoteDescription(await r.json());
+    log('connected — speak!');
+  } catch (e) { log('error: ' + e.message); console.error(e); }
+};
+</script></body></html>"""
 
-    _ui = SmallWebRTCPrebuiltUI() if isinstance(SmallWebRTCPrebuiltUI, type) else SmallWebRTCPrebuiltUI
-    app.mount("/", _ui, name="prebuilt")
-    print("[gateway] prebuilt UI mounted at /", flush=True)
-except Exception as e:  # noqa: BLE001
-    print(f"[gateway] prebuilt UI not mounted ({e}); /api/offer still works", flush=True)
+
+@app.get("/", response_class=HTMLResponse)
+async def index():
+    return _CALL_UI
 
 
 if __name__ == "__main__":
