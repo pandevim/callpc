@@ -41,7 +41,10 @@ def _ice_config():
     servers = [{"urls": "stun:stun.l.google.com:19302"}]
     turn = os.environ.get("TURN_URL")
     if turn:
-        s = {"urls": turn}
+        # TURN_URL may be comma-separated (UDP :80 / TCP :443 / TLS turns:443) —
+        # offering all transports maximizes traversal through strict firewalls.
+        urls = [u.strip() for u in turn.split(",") if u.strip()]
+        s = {"urls": urls if len(urls) > 1 else urls[0]}
         if os.environ.get("TURN_USER"):
             s["username"] = os.environ["TURN_USER"]
         if os.environ.get("TURN_PASS"):
