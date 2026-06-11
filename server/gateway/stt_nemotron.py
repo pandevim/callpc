@@ -12,6 +12,7 @@ Pipecat reorg moves an import, the gateway image's %test (python -c import)
 surfaces it at build time, not at call time.
 """
 import asyncio
+import concurrent.futures
 import os
 import sys
 
@@ -71,10 +72,16 @@ class NemotronSTTService(STTService):
 
         self._session = onnx_engine.OnnxStreamingSession(self._asr, sample_rate=self.SAMPLE_RATE)
         self._acc = ""  # accumulated text for the in-flight utterance
+        # SINGLE-thread executor: feed/finalize/reset mutate one session; on the
+        # default pool they ran on different threads concurrently (audio keeps
+        # flowing while a VAD stop is being finalized) and raced. One worker
+        # serializes every engine call in arrival order.
+        self._exec = concurrent.futures.ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="nemotron-stt")
 
     async def _in_thread(self, fn, *args):
         # the engine is blocking numpy/onnx — keep it off the event loop
-        return await asyncio.get_running_loop().run_in_executor(None, fn, *args)
+        return await asyncio.get_running_loop().run_in_executor(self._exec, fn, *args)
 
     async def run_stt(self, audio: bytes):
         """Feed one PCM chunk; emit a cumulative interim transcript if text grew."""
@@ -94,10 +101,21 @@ class NemotronSTTService(STTService):
             self._acc = ""
             await self._in_thread(self._session.reset)
         elif isinstance(frame, UserStoppedSpeakingFrame):
-            tail = await self._in_thread(self._session.finalize)
+            # NEVER lose the turn: without a final TranscriptionFrame the
+            # aggregator won't run the LLM and the call goes silent. If the
+            # engine flush fails, the accumulated interims ARE the transcript.
+            try:
+                tail = await self._in_thread(self._session.finalize)
+            except Exception as e:  # noqa: BLE001 — degrade to interims, keep the call alive
+                print(f"[NemotronSTT] finalize failed ({type(e).__name__}: {e}); "
+                      "using interim text", flush=True)
+                tail = ""
             text = (self._acc + (tail or "")).strip()
             self._acc = ""
-            await self._in_thread(self._session.reset)
+            try:
+                await self._in_thread(self._session.reset)
+            except Exception as e:  # noqa: BLE001
+                print(f"[NemotronSTT] reset failed ({type(e).__name__}: {e})", flush=True)
             if text:
                 await self.push_frame(
                     TranscriptionFrame(text, self._user_id, time_now_iso8601(), language=self._lang))

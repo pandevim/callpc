@@ -190,6 +190,16 @@ async def offer(req: dict, background_tasks: BackgroundTasks):
         await conn.renegotiate(sdp=req["sdp"], type=req["type"],
                                restart_pc=req.get("restart_pc", False))
     else:
+        # Last caller wins: this is a personal phone line, one call at a time.
+        # A page reload leaves the old pipeline running for many seconds (seen
+        # live: a zombie pipeline kept transcribing and crashed its STT on an
+        # empty VAD window) — tear down every existing call before answering.
+        for old in list(_connections.values()):
+            print(f"[gateway] closing previous call {old.pc_id} (new caller)", flush=True)
+            try:
+                await old.disconnect()
+            except Exception as e:  # noqa: BLE001
+                print(f"[gateway] error closing {old.pc_id}: {e}", flush=True)
         conn = SmallWebRTCConnection(ice_servers=ICE_SERVERS)
         await conn.initialize(sdp=req["sdp"], type=req["type"])
 

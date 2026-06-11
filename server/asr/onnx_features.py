@@ -31,6 +31,11 @@ def _stft_power(x):
 
 def mel(samples: np.ndarray) -> np.ndarray:
     """samples: float32 mono 16k in [-1,1]. Returns (128, T) float32 log-mel."""
+    if samples.size <= N_FFT // 2:
+        # Too short for the reflect pad (np.pad mode="reflect" raises on empty
+        # input — seen live when VAD fires a stop with no audio buffered).
+        # <=16 ms holds no speech; an empty mel makes feed/finalize no-ops.
+        return np.zeros((128, 0), np.float32)
     x = samples.astype(np.float32)
     x = np.concatenate([x[:1], x[1:] - PREEMPH * x[:-1]]).astype(np.float32)  # preemph
     power = _stft_power(x)                                              # (257, T)
