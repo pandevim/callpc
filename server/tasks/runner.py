@@ -77,6 +77,8 @@ class TaskRunner:
         self.steps: list[dict] = []  # {n, thought, action_text, dispatched, result, png_b64}
         self._turns: list[dict] = []  # model history: {"sent_b64", "response"}
         self._task: asyncio.Task | None = None
+        self._last_phrase = ""       # narration dedupe
+        self._suppressed = 0
 
     # ---------------- public API ----------------
 
@@ -96,6 +98,7 @@ class TaskRunner:
             return {"error": "a task is already running — cancel it first"}
         self.state, self.instruction, self.detail = "running", instruction, ""
         self.steps, self._turns = [], []
+        self._last_phrase, self._suppressed = "", 0
         self._task = asyncio.get_running_loop().create_task(self._run(instruction))
         return {"ok": True}
 
@@ -108,6 +111,22 @@ class TaskRunner:
                 pass
             self.state, self.detail = "cancelled", "cancelled by user"
         return {"ok": True, "state": self.state}
+
+    async def _narrate_action(self, pkind: str, args: dict):
+        """Narrate signal, not noise: announce a phrase once when it changes
+        (typing/keys always carry content so they always differ), and emit a
+        'still working' heartbeat instead of repeating — the model may retry
+        the same click several times (e.g. when the screen gives no feedback),
+        which used to come out as 'clicking clicking clicking'."""
+        phrase = _phrase(pkind, args)
+        if phrase != self._last_phrase:
+            self._last_phrase = phrase
+            self._suppressed = 0
+            await _say(phrase)
+            return
+        self._suppressed += 1
+        if self._suppressed % 4 == 0:
+            await _say("Still working on it.")
 
     # ---------------- the loop ----------------
 
@@ -150,7 +169,7 @@ class TaskRunner:
                         continue
                     pkind, args = mapped
                     step["dispatched"] = f"{pkind} {args}"
-                    await _say(_phrase(pkind, args))
+                    await self._narrate_action(pkind, args)
                     if pkind == "wait":
                         await asyncio.sleep(args["ms"] / 1000)
                         step["result"] = "waited"
