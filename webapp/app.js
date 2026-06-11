@@ -29,6 +29,15 @@ let muted = false;
 let timerStart = 0;
 let timerHandle = null;
 let talkingHandle = null;
+let micVizHandle = null;
+let ringHandle = null;
+let audioCtx = null;    // one shared AudioContext (created on the call gesture)
+
+function actx() {
+  audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+  if (audioCtx.state === "suspended") audioCtx.resume();
+  return audioCtx;
+}
 
 function show(name) {
   for (const [k, el] of Object.entries(screens)) el.classList.toggle("active", k === name);
@@ -49,12 +58,40 @@ function startTimer() {
 }
 function stopTimer() { clearInterval(timerHandle); timerHandle = null; }
 
+// ---------- ringback tone while calling (subtle: two soft sines, 1.2s on / ~3s off) ----------
+function ringOnce() {
+  const c = actx();
+  const t = c.currentTime;
+  const g = c.createGain();
+  g.connect(c.destination);
+  g.gain.setValueAtTime(0, t);
+  g.gain.linearRampToValueAtTime(0.05, t + 0.08);   // quiet — barely-there ringback
+  g.gain.setValueAtTime(0.05, t + 1.0);
+  g.gain.linearRampToValueAtTime(0, t + 1.25);
+  for (const f of [440, 480]) {                      // classic ringback dyad
+    const o = c.createOscillator();
+    o.type = "sine";
+    o.frequency.value = f;
+    o.connect(g);
+    o.start(t);
+    o.stop(t + 1.3);
+  }
+}
+function startRingtone() {
+  stopRingtone();
+  try { ringOnce(); ringHandle = setInterval(ringOnce, 4200); } catch (_) {}
+}
+function stopRingtone() {
+  clearInterval(ringHandle);
+  ringHandle = null;
+}
+
 // ---------- "bot is talking" avatar glow (driven by remote audio level) ----------
 function watchRemoteAudio(stream) {
   try {
-    const ctx = new (window.AudioContext || window.webkitAudioContext)();
-    const src = ctx.createMediaStreamSource(stream);
-    const analyser = ctx.createAnalyser();
+    const c = actx();
+    const src = c.createMediaStreamSource(stream);
+    const analyser = c.createAnalyser();
     analyser.fftSize = 256;
     src.connect(analyser);
     const buf = new Uint8Array(analyser.frequencyBinCount);
@@ -63,6 +100,30 @@ function watchRemoteAudio(stream) {
       const level = buf.reduce((a, b) => a + b, 0) / buf.length;
       $("call-avatar").classList.toggle("talking", level > 8);
     }, 150);
+  } catch (_) { /* visual nicety only */ }
+}
+
+// ---------- caller mic meter (you talking / stopped; flat while muted) ----------
+function watchMicAudio(stream) {
+  try {
+    const c = actx();
+    const src = c.createMediaStreamSource(stream);
+    const analyser = c.createAnalyser();
+    analyser.fftSize = 256;
+    src.connect(analyser);
+    const buf = new Uint8Array(analyser.frequencyBinCount);
+    const bars = document.querySelectorAll("#mic-viz i");
+    const seg = Math.floor(buf.length / 2 / bars.length);  // voice lives in the lower half
+    micVizHandle = setInterval(() => {
+      analyser.getByteFrequencyData(buf);
+      bars.forEach((bar, i) => {
+        let sum = 0;
+        for (let j = i * seg; j < (i + 1) * seg; j++) sum += buf[j];
+        const v = Math.min(1, sum / seg / 150);
+        bar.style.transform = `scaleY(${Math.max(0.15, v)})`;
+        bar.style.opacity = v > 0.1 ? "0.95" : "0.3";
+      });
+    }, 90);
   } catch (_) { /* visual nicety only */ }
 }
 
@@ -86,6 +147,7 @@ async function startCall() {
   }
 
   setRingStatus("calling…");
+  startRingtone();  // the call tap is the user gesture WebAudio needs
   try {
     pc = new RTCPeerConnection({ iceServers: await iceServers() });
     micStream.getTracks().forEach((t) => pc.addTrack(t, micStream));
@@ -96,8 +158,10 @@ async function startCall() {
     pc.onconnectionstatechange = () => {
       if (!pc) return;
       if (pc.connectionState === "connected") {
+        stopRingtone();
         show("call");
         startTimer();
+        if (micStream) watchMicAudio(micStream);
       } else if (["failed", "disconnected", "closed"].includes(pc.connectionState)) {
         if (screens.call.classList.contains("active") || screens.ringing.classList.contains("active")) {
           endCall("Call ended", pc.connectionState === "failed" ? "connection failed" : "");
@@ -132,8 +196,11 @@ async function startCall() {
 
 function teardown() {
   stopTimer();
+  stopRingtone();
   clearInterval(talkingHandle);
   talkingHandle = null;
+  clearInterval(micVizHandle);
+  micVizHandle = null;
   if (pc) { try { pc.close(); } catch (_) {} pc = null; }
   if (micStream) { micStream.getTracks().forEach((t) => t.stop()); micStream = null; }
   $("remote").srcObject = null;

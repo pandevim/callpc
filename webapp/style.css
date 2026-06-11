@@ -94,3 +94,16 @@ body {
 .dark.engaged svg { fill: #15192b; }
 
 .hint { color: #93a0b8; font-size: .85rem; }
+
+/* ---------- caller mic level (you talking / stopped) ---------- */
+.mic-viz {
+  display: flex; align-items: center; justify-content: center;
+  gap: 4px; height: 30px; margin-top: 18px;
+}
+.mic-viz i {
+  width: 4px; height: 22px; border-radius: 2px;
+  background: #6ee7a0;
+  transform: scaleY(.15); transform-origin: center;
+  opacity: .3;
+  transition: transform .09s linear, opacity .25s ease;
+}
