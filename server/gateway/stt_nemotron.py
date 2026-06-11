@@ -41,7 +41,7 @@ class NemotronSTTService(STTService):
     SAMPLE_RATE = 16000
 
     def __init__(self, *, lang: str = "en-US", model_dir: str | None = None,
-                 user_id: str = "caller", **kwargs):
+                 user_id: str = "caller", require_gpu: bool | None = None, **kwargs):
         super().__init__(sample_rate=self.SAMPLE_RATE, **kwargs)
         self._lang = lang
         self._user_id = user_id
@@ -49,6 +49,26 @@ class NemotronSTTService(STTService):
         if model_dir:
             kw["model_dir"] = model_dir
         self._asr = onnx_engine.OnnxASR(**kw)
+
+        # Guard against a silent CPU fallback: get_providers() reflects the
+        # provider actually ACTIVE on the session (CUDA drops off here if its
+        # libs fail to load at runtime, even when compiled in). On a real call
+        # ASR must run on the GPU. Default REQUIRE_GPU=1 -> hard fail; set
+        # REQUIRE_GPU=0 to allow CPU (e.g. a GPU-less dev box).
+        active = self._asr.enc.get_providers()
+        self.on_gpu = any(("CUDA" in p) or ("Tensorrt" in p) for p in active)
+        if require_gpu is None:
+            require_gpu = os.environ.get("REQUIRE_GPU", "1") not in ("0", "false", "False", "")
+        info = f"[NemotronSTT] onnxruntime providers={active} on_gpu={self.on_gpu}"
+        if not self.on_gpu:
+            if require_gpu:
+                raise RuntimeError(
+                    info + " — ASR fell back to CPU but REQUIRE_GPU=1. Check the CUDA-12 "
+                    "libs / LD_LIBRARY_PATH in the gateway image, or set REQUIRE_GPU=0 to allow CPU.")
+            print(info + "  WARNING: running on CPU", flush=True)
+        else:
+            print(info, flush=True)
+
         self._session = onnx_engine.OnnxStreamingSession(self._asr, sample_rate=self.SAMPLE_RATE)
         self._acc = ""  # accumulated text for the in-flight utterance
 

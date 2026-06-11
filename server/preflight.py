@@ -224,9 +224,13 @@ def check_asr(args):
     # RAM; on GPU they're in VRAM and RSS drops to ~0.9 GB. Only a slow GPU RTF is
     # a real failure (the production path is GPU).
     where = "GPU" if on_gpu else "CPU"
+    # If this host HAS a GPU but ASR ran on CPU, that's a broken CUDA setup
+    # (onnxruntime-gpu libs not loading) — fail, don't let it pass silently.
+    if not on_gpu and _read_gpus():
+        return FAIL, f"GPU present but ASR ran on CPU ({active}) — CUDA libs not loading (check onnxruntime-gpu / LD_LIBRARY_PATH)"
     if on_gpu and rtf > 1.0:
         return FAIL, f"RTF {rtf:.2f} > 1.0 on GPU — slower than real-time"
-    note = "" if on_gpu else "  (CPU: weights in host RAM; GPU keeps them in VRAM — that's the prod path)"
+    note = "" if on_gpu else "  (no GPU here; CPU is fine for a dev box — GPU is the prod path)"
     return PASS, f"engine ok on {where}, RSS {rss_mb:.0f} MB, RTF {rtf:.2f}{note}"
 
 
