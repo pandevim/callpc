@@ -21,9 +21,17 @@ pub fn size() -> Result<(u32, u32)> {
 }
 
 /// PNG screenshot of the primary monitor -> (png_bytes, width, height).
+///
+/// GNOME/KDE Wayland gate screen capture behind an interactive xdg-desktop-
+/// portal grant — the first call pops an "Allow screen sharing?" dialog the
+/// user must approve (a background/headless process can't, so it returns
+/// "Screenshot failed or canceled"). X11/XWayland and a plain Xorg session
+/// capture with no prompt. This is the documented Wayland friction (PLAN.md).
 pub fn capture() -> Result<(Vec<u8>, u32, u32)> {
     let m = primary()?;
-    let img = m.capture_image().context("capturing screen")?;
+    let img = m.capture_image().context(
+        "capturing screen (on GNOME/KDE Wayland, approve the screen-share \
+         portal prompt, or use an Xorg session)")?;
     let (w, h) = (img.width(), img.height());
     let mut buf = Vec::new();
     image::DynamicImage::ImageRgba8(img)

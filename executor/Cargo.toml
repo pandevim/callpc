@@ -8,6 +8,8 @@ license = "MIT"
 [dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "sync"] }
 tokio-tungstenite = { version = "0.24", features = ["rustls-tls-native-roots"] }
+# ring (not the default aws-lc-rs, which needs cmake/clang to build)
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
 futures-util = "=0.3.31"           # 0.3.32 wants a nonexistent futures-io 0.3.32
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -16,9 +18,12 @@ anyhow = "1"
 dirs = "5"
 gethostname = "0.5"
 # default feature is "xdo" (needs system libxdo); use pure-Rust x11rb + native
-# wayland/libei instead. These are Linux-only enigo features — inert on
-# Windows (SendInput) and macOS (CGEvent), which build unconditionally.
-enigo = { version = "0.2", default-features = false, features = ["x11rb", "wayland", "libei"] }
+# wayland instead. x11rb drives input on X11 AND GNOME/KDE via XWayland's XTEST;
+# wayland covers wlroots compositors. NOT libei: enigo 0.2.1's libei::Con::new
+# panics (uncatchably) when the RemoteDesktop portal denies the session — fatal
+# on a GNOME-Wayland box with no interactive grant. These are Linux-only enigo
+# features, inert on Windows (SendInput) / macOS (CGEvent).
+enigo = { version = "0.2", default-features = false, features = ["x11rb", "wayland"] }
 xcap = "0.3"                       # screenshots: DXGI / CoreGraphics / X11 / Wayland
 image = { version = "0.25", default-features = false, features = ["png"] }
 

@@ -20,7 +20,13 @@ impl InputThread {
     pub fn spawn() -> Self {
         let (tx, rx) = mpsc::channel::<(String, Value, oneshot::Sender<Result<(), String>>)>();
         thread::spawn(move || {
-            let mut enigo = match Enigo::new(&Settings::default()) {
+            // catch_unwind: some enigo backends panic on init (e.g. a denied
+            // Wayland portal) instead of returning Err — don't take the
+            // process down, fail every action with a clear message instead.
+            let enigo = std::panic::catch_unwind(|| Enigo::new(&Settings::default()))
+                .unwrap_or_else(|_| Err(enigo::NewConError::EstablishCon(
+                    "input backend panicked on init")));
+            let mut enigo = match enigo {
                 Ok(e) => e,
                 Err(e) => {
                     eprintln!("[exec] FATAL: input backend init failed: {e}");

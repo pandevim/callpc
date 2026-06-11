@@ -214,6 +214,9 @@ async fn main() -> Result<()> {
         i += 1;
     }
 
+    // rustls 0.23 no longer auto-selects a crypto backend (panics otherwise).
+    let _ = rustls::crypto::ring::default_provider().install_default();
+
     let input = input::InputThread::spawn();
     let mut backoff = 2u64;
     loop {
