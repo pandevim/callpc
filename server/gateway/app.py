@@ -28,6 +28,7 @@ from pipecat.frames.frames import (
     LLMFullResponseEndFrame,
     TextFrame,
     TranscriptionFrame,
+    TTSSpeakFrame,
 )
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
@@ -47,6 +48,8 @@ from tts_kyutai import KyutaiTTSService
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from control.hub import router as control_router  # noqa: E402
 from tasks.runner import router as tasks_router   # noqa: E402
+import tasks.runner as task_runner                 # noqa: E402  (NARRATE hook)
+import brain                                       # noqa: E402  (persona + tools, Phase 3)
 
 HOST = os.environ.get("GATEWAY_HOST", "0.0.0.0")
 PORT = int(os.environ.get("GATEWAY_PORT", "8080"))
@@ -63,19 +66,8 @@ BRAIN_BASE_URL = os.environ.get("BRAIN_BASE_URL", "http://127.0.0.1:8001/v1")
 BRAIN_MODEL = os.environ.get("BRAIN_MODEL", "brain")
 BRAIN_API_KEY = os.environ.get("BRAIN_API_KEY", "x")
 
-# Phone-style persona (conversational only — the computer_task tool is wired in
-# Phase 3). NB: the earlier wording ("once you're fully set up") made the model
-# stall every turn with invented "connection stabilizing" excuses.
-PERSONA = os.environ.get("PERSONA", (
-    "You are callpc, a friendly assistant the user reached by phoning their computer. "
-    "You are speaking out loud: keep replies to one or two short, natural sentences — "
-    "no lists, no markdown, no emoji. In this version you cannot yet control the "
-    "computer (open apps, click, type) — that feature exists but is not connected. "
-    "If asked to do something on the computer, say plainly that you can't do that "
-    "yet — once, briefly, without promising it'll be ready shortly and without "
-    "mentioning connections or stabilizing — then carry on helping with whatever "
-    "you can answer in conversation."
-))
+# Persona + tool definitions live in brain.py (Phase 3): the brain dispatches
+# computer_task/task_status/cancel_task to the Phase-2 task runner.
 
 
 def _ice_config():
@@ -168,7 +160,9 @@ async def _run_bot(connection: SmallWebRTCConnection):
             extra={"extra_body": {"chat_template_kwargs": {"enable_thinking": False}}},
         ),
     )
-    context = LLMContext(messages=[{"role": "system", "content": PERSONA}])
+    brain.register_handlers(llm)  # computer_task / task_status / cancel_task
+    context = LLMContext(messages=[{"role": "system", "content": brain.PERSONA}],
+                         tools=brain.build_tools())
     agg = LLMContextAggregatorPair(context)
 
     # caller mic -> STT -> (log) -> user-context -> brain -> (log) -> TTS -> out
@@ -191,6 +185,13 @@ async def _run_bot(connection: SmallWebRTCConnection):
     pipeline = Pipeline(procs)
     task = PipelineTask(pipeline, params=PipelineParams(allow_interruptions=True))
 
+    # Task-runner narration -> spoken into THIS call. TTSSpeakFrame is
+    # synthesized directly (independent of an LLM turn) and lands in the
+    # conversation context, so the brain knows what was narrated.
+    async def _narrate(text: str):
+        await task.queue_frame(TTSSpeakFrame(text))
+    task_runner.NARRATE = _narrate
+
     # Closing the CONNECTION does not stop the PIPELINE: without this, every
     # reload left a zombie pipeline running on a dead transport (seen live —
     # an old aggregator kept claiming user turns). Cancel the task whenever
@@ -206,6 +207,8 @@ async def _run_bot(connection: SmallWebRTCConnection):
         await runner.run(task)
     finally:
         _tasks.pop(connection.pc_id, None)
+        if task_runner.NARRATE is _narrate:  # don't clobber a newer call's hook
+            task_runner.NARRATE = None
         print(f"[gateway] pipeline finished for {connection.pc_id}", flush=True)
 
 

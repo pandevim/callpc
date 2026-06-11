@@ -32,7 +32,40 @@ from control.hub import hub
 from tasks.uitars_client import UITarsClient, box_center_px, to_protocol
 
 MAX_STEPS = 15
-NARRATE = None  # Phase 3: set to a coroutine(text) to speak progress
+NARRATE = None  # Phase 3: app.py sets this per call to a coroutine(text) that
+                # queues a TTSSpeakFrame — spoken narration between actions.
+
+
+async def _say(text: str):
+    fn = NARRATE
+    if fn:
+        try:
+            await fn(text)
+        except Exception as e:  # noqa: BLE001 — narration must never kill a task
+            print(f"[task] narration failed: {e}", flush=True)
+
+
+def _phrase(kind: str, args: dict) -> str:
+    """Short spoken phrase for an action (English — UI-TARS's own summaries
+    sometimes come back in Chinese, which our TTS can't speak)."""
+    if kind == "click":
+        return "clicking"
+    if kind == "left_double":
+        return "double clicking"
+    if kind == "right_single":
+        return "right clicking"
+    if kind == "type":
+        text = args.get("text", "").strip()
+        return f"typing {text[:40]}" if text else "typing"
+    if kind == "hotkey":
+        return "pressing " + " ".join(args.get("keys", []))
+    if kind == "scroll":
+        return "scrolling " + args.get("direction", "")
+    if kind == "drag":
+        return "dragging"
+    if kind == "wait":
+        return "waiting a moment"
+    return kind
 
 
 class TaskRunner:
@@ -104,10 +137,12 @@ class TaskRunner:
                     if kind == "finished":
                         self.state = "finished"
                         self.detail = action["action_inputs"].get("content", "done")
+                        await _say("All done.")
                         return
                     if kind == "call_user":
                         self.state = "needs_user"
                         self.detail = "the agent asked for user input"
+                        await _say("I need more direction to continue.")
                         return
                     mapped = to_protocol(action, screen_w, screen_h)
                     if mapped is None:
@@ -115,6 +150,7 @@ class TaskRunner:
                         continue
                     pkind, args = mapped
                     step["dispatched"] = f"{pkind} {args}"
+                    await _say(_phrase(pkind, args))
                     if pkind == "wait":
                         await asyncio.sleep(args["ms"] / 1000)
                         step["result"] = "waited"
@@ -123,15 +159,18 @@ class TaskRunner:
                     step["result"] = "ok" if result.get("ok") else f"FAILED: {result.get('error')}"
                     if not result.get("ok"):
                         self.state, self.detail = "failed", f"executor error: {result.get('error')}"
+                        await _say("Something went wrong with the computer, I had to stop.")
                         return
                     await asyncio.sleep(0.8)  # let the UI settle before the next shot
 
             self.state, self.detail = "failed", f"no finished() after {MAX_STEPS} steps"
+            await _say("I couldn't finish that task.")
         except asyncio.CancelledError:
             raise
         except Exception as e:  # noqa: BLE001 — surface in the status, don't die silently
             self.state, self.detail = "failed", f"{type(e).__name__}: {e}"
             print(f"[task] failed: {self.detail}", flush=True)
+            await _say("I hit a problem and had to stop the task.")
 
 
 runner = TaskRunner()

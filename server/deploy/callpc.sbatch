@@ -137,10 +137,15 @@ fi
 # NB: Qwen3.5's hybrid GDN arch needs vLLM >=0.17 — if the brain errors with an
 # unknown-architecture message, the vLLM image is too old; re-pull :latest.
 echo; echo "=== [2/5] vllm-brain ($BRAIN_MODEL, fp8) on :$BRAIN_PORT ==="
+# Tool calling (Phase 3): the gateway's computer_task/task_status/cancel_task
+# tools need vLLM's tool parser. qwen3_coder is the documented parser for
+# Qwen3.5; if the brain crashes on a tool call, the image's vLLM predates the
+# parser fix (vLLM issue #36769) — re-pull vllm.sif.
 apptainer run --nv --bind "$CALLPC_BIND" "$VLLM_SIF" \
     "$BRAIN_MODEL" --served-model-name brain --quantization fp8 \
     --port "$BRAIN_PORT" --gpu-memory-utilization "$BRAIN_UTIL" \
     --max-model-len "$BRAIN_MAXLEN" --enforce-eager \
+    --enable-auto-tool-choice --tool-call-parser qwen3_coder \
     > "${LOG}_vllm-brain.log" 2>&1 &
 BG_PIDS+=($!)
 wait_for_http "http://127.0.0.1:$BRAIN_PORT/health" vllm-brain "${BG_PIDS[-1]}" 900 \
