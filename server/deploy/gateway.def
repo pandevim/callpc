@@ -47,6 +47,9 @@ From: pytorch/pytorch:2.5.1-cuda12.4-cudnn9-runtime
     # issues at build, not at call time), and assert onnxruntime-gpu won (CUDA EP).
     python <<'PY'
 import pipecat, fastapi, cv2, sentencepiece, soundfile, numpy
+import av  # voice-note decode (gateway/chat.py); present via aiortc
+# the chat gateway resamples voice notes with PyAV — validate the API at build
+assert hasattr(av, "AudioResampler")
 import onnxruntime as ort
 # task-runner deps (Phase 2): fail the build if the parser API moved
 from ui_tars.action_parser import add_box_token, parse_action_to_structure_output, smart_resize

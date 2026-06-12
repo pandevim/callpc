@@ -40,13 +40,23 @@ The voice loop has real **barge-in** (interrupt the bot mid-sentence) and the ca
 page is **push-to-talk** by default. A **shared passcode** gates every action so
 not just anyone with the URL can call or drive a paired computer.
 
+Once a computer is connected, the web page is a **WhatsApp-style chat** with it
+(the call button sits top-right): type or **hold the mic to send a voice note**
+(transcribed by the same STT), ask for a **screenshot** (📷 quick-action or just
+ask), and watch task progress stream into a single in-place status bubble — the
+chat only gets durable messages on milestones: **done (+ final screenshot)**,
+**stuck and needs you (+ screenshot)**, or **failed (+ screenshot)**. Tasks
+started from a voice call report into the chat too, so it doubles as the call's
+paper trail.
+
 ## Repo layout
 
 ```
 callpc/
   server/
     gateway/        FastAPI + Pipecat voice pipeline (STT→brain→TTS), tool
-                    handlers (brain.py), Kyutai TTS server + client, control hub
+                    handlers (brain.py), chat gateway (chat.py), Kyutai TTS
+                    server + client, control hub
     tasks/          UI-TARS task runner + OpenAI-compatible client (coord mapping)
     control/        executor control hub (pairing, device tokens, action relay)
     asr/            vendored Nemotron streaming ONNX engine (STT)
@@ -54,7 +64,7 @@ callpc/
     preflight.py    Phase-0 health checks (GPU, deps, models, STUN, …)
   executor/         Rust agent installed on the controlled computer (the only install)
     src/{main,screen,input,uinput}.rs
-  webapp/           call UI (index/style/app.js) + connect.html + debug.html
+  webapp/           chat + call UI (index/style/app.js) + connect.html + debug.html
   docs/             PROTOCOL.md (control channel), ASR_PROTOCOL.md
   PLAN.md           full design + build log
 ```

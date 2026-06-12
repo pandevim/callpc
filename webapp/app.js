@@ -41,6 +41,7 @@ let authRequired = false;
 
 const screens = {
   setup: $("screen-setup"),
+  chat: $("screen-chat"),
   ringing: $("screen-ringing"),
   call: $("screen-call"),
   ended: $("screen-ended"),
@@ -127,7 +128,8 @@ async function fetchOnline() {
 async function detectContext() {
   const [local, online] = await Promise.all([probeLocal(), fetchOnline()]);
   ctx = { local, online };
-  renderSetup();
+  if (screens.chat.classList.contains("active")) updateChatHead();  // live presence
+  else if (screens.setup.classList.contains("active")) renderSetup();
   maybeAutoConfigure();   // if a fresh local agent is waiting, pair it automatically
 }
 
@@ -166,8 +168,6 @@ function osLabel(d) {
 
 function renderSetup() {
   const connected = ctx.online.length > 0;
-  const dev = ctx.online[0] || null;                  // single-tenant for now
-  const onThis = !!(ctx.local && ctx.local.online);   // probe says: this machine
   const localPresent = !!ctx.local;                   // an agent is running on this machine
 
   // --- choose what to show ---
@@ -177,8 +177,14 @@ function renderSetup() {
   const connecting = !connected && localPresent;
   const installView = forceInstall || (!connected && !localPresent);
 
+  // connected and not asked for the install view -> the chat IS the home screen
+  // (unless the chat just rejected our passcode — stay parked on the prompt)
+  if (!installView && connected) {
+    if (!chatAuthFailed) enterChat();
+    return;
+  }
+
   $("setup-install").style.display = installView ? "" : "none";
-  $("setup-call").style.display = (!installView && connected) ? "" : "none";
 
   if (installView) {
     $("setup-emoji").textContent = "⬇️";
@@ -197,21 +203,6 @@ function renderSetup() {
     $("setup-sub").textContent = ctx.local.paired
       ? "Agent is running — reconnecting…"
       : "Agent detected — connecting it…";
-    toggleLink("Set up a different computer →", () => { forceInstall = true; renderSetup(); });
-  } else {
-    // CALL view — a computer is connected
-    $("setup-emoji").textContent = "💻";
-    const distro = osLabel(onThis ? ctx.local : dev);
-    if (onThis) {
-      $("setup-title").textContent = "This computer";
-      $("setup-sub").innerHTML = `<span class="ok">✓ connected</span>` +
-        (distro ? ` · ${distro}` : "") + `<br><small>Call it from your phone — or test from here.</small>`;
-      $("call-hint").textContent = "call from here";
-    } else {
-      $("setup-title").textContent = dev?.name || "My Computer";
-      $("setup-sub").innerHTML = `<span class="ok">✓ connected</span>` + (distro ? ` · ${distro}` : "");
-      $("call-hint").textContent = "call";
-    }
     toggleLink("Set up a different computer →", () => { forceInstall = true; renderSetup(); });
   }
 }
@@ -285,7 +276,8 @@ function startDetectLoop() {
   detectContext();
   clearInterval(detectTimer);
   detectTimer = setInterval(() => {
-    if (screens.setup.classList.contains("active")) detectContext();
+    if (screens.setup.classList.contains("active") ||
+        screens.chat.classList.contains("active")) detectContext();
   }, 2500);
 }
 
@@ -410,6 +402,7 @@ async function probeAuth() {
     f.value = getStoredCode();
     f.addEventListener("input", () => {
       setCode(f.value);
+      chatAuthFailed = false;  // let the detect loop retry the chat with the new code
       // a passcode is needed to mint a pairing code — retry once typed
       clearTimeout(window._pcDeb);
       window._pcDeb = setTimeout(() => { if ($("setup-install").style.display !== "none") getPairCode(); }, 500);
@@ -553,9 +546,313 @@ $("btn-mode").onclick = () => {
   applyMicState();
 };
 
+// ====================================================================
+//  Chat — WhatsApp-style messaging with the computer (/api/chat/ws)
+// ====================================================================
+const CHAT_WS_URL = (API_BASE || location.origin).replace(/^http/, "ws") + "/api/chat/ws";
+const chatLog = $("chat-log");
+let chatWS = null, chatRetry = null;
+let chatAuthFailed = false;  // last connect was rejected (4401) — stop the
+                             // setup->chat redirect loop until the code changes
+let statusBub = null;        // the single in-place progress bubble
+let pendingVoice = null;     // my just-sent voice bubble, awaiting its transcript
+let localStatus = "";        // client-only status (e.g. quick screenshot fetch)
+
+function enterChat() {
+  if (!screens.chat.classList.contains("active")) show("chat");
+  updateChatHead();
+  connectChat();
+}
+
+function updateChatHead() {
+  const dev = ctx.online[0] || null;
+  const onThis = !!(ctx.local && ctx.local.online);
+  $("chat-name").textContent =
+    onThis ? "This computer" : (dev?.name || ctx.local?.name || "My Computer");
+  const distro = osLabel(onThis ? ctx.local : dev);
+  $("chat-presence").textContent =
+    dev ? "online" + (distro ? " · " + distro : "") : "offline — waiting for the computer…";
+  $("chat-presence").classList.toggle("off", !dev);
+}
+
+function connectChat() {
+  if (chatWS && chatWS.readyState <= 1) return;   // already open/connecting
+  clearTimeout(chatRetry);
+  const code = getStoredCode();
+  chatWS = new WebSocket(CHAT_WS_URL + (code ? "?code=" + encodeURIComponent(code) : ""));
+  chatWS.onopen = () => { chatAuthFailed = false; };
+  chatWS.onmessage = (e) => { try { handleChat(JSON.parse(e.data)); } catch (_) {} };
+  chatWS.onclose = (e) => {
+    chatWS = null;
+    if (e.code === 4401) { needPasscode(); return; }
+    if (screens.chat.classList.contains("active")) chatRetry = setTimeout(connectChat, 2000);
+  };
+}
+
+// wrong/missing passcode: park on the setup screen until a new code is typed
+// (the passcode input listener clears chatAuthFailed; the detect loop then
+// re-enters the chat, which reconnects with the new code)
+function needPasscode() {
+  chatAuthFailed = true;
+  show("setup");
+  $("setup-install").style.display = "none";
+  $("setup-emoji").textContent = "🔒";
+  $("setup-title").textContent = "Passcode needed";
+  $("setup-sub").textContent = "Enter the passcode to open the chat.";
+  const f = $("passcode");
+  f.style.display = "";
+  f.focus();
+}
+
+function handleChat(m) {
+  if (m.type === "history") {
+    chatLog.querySelectorAll(".bub").forEach((el) => el.remove());
+    statusBub = null;
+    pendingVoice = null;
+    for (const it of m.items || []) renderItem(it);
+    setStatusBubble(m.status || "");
+    scrollChat(true);
+    return;
+  }
+  if (m.type === "status") { localStatus = ""; setStatusBubble(m.text || ""); return; }
+  if (m.type === "error") { addInfo("⚠️ " + m.text); return; }
+  if (m.type === "image" && localStatus) { localStatus = ""; setStatusBubble(""); }
+  renderItem(m);
+}
+
+function renderItem(it) {
+  $("chat-empty").style.display = "none";
+  if (it.type === "msg") addMsg(it.role === "user" ? "user" : "bot", it.text, it.ts);
+  else if (it.type === "image") addImage(it);
+  else if (it.type === "transcript") addTranscript(it.text, it.ts);
+}
+
+// ---------- bubbles ----------
+function bub(cls) {
+  $("chat-empty").style.display = "none";
+  const d = document.createElement("div");
+  d.className = "bub " + cls;
+  chatLog.appendChild(d);
+  if (statusBub) chatLog.appendChild(statusBub);  // progress stays visually last
+  return d;
+}
+
+function timeMeta(ts) {
+  const d = ts ? new Date(ts * 1000) : new Date();
+  const s = document.createElement("span");
+  s.className = "meta";
+  s.textContent = String(d.getHours()).padStart(2, "0") + ":" +
+                  String(d.getMinutes()).padStart(2, "0");
+  return s;
+}
+
+function addMsg(side, text, ts) {
+  const d = bub(side);
+  const t = document.createElement("span");
+  t.className = "txt";
+  t.textContent = text;
+  d.append(t, timeMeta(ts));
+  scrollChat();
+  return d;
+}
+
+function addInfo(text) {
+  const d = bub("info");
+  d.textContent = text;
+  scrollChat();
+}
+
+function addImage(it) {
+  const d = bub("bot img");
+  if (it.b64) {
+    const img = document.createElement("img");
+    img.src = "data:image/png;base64," + it.b64;
+    img.alt = it.caption || "screenshot";
+    img.onclick = () => {                          // tap to view full-screen
+      const ov = document.createElement("div");
+      ov.className = "lightbox";
+      const big = document.createElement("img");
+      big.src = img.src;
+      ov.appendChild(big);
+      ov.onclick = () => ov.remove();
+      document.body.appendChild(ov);
+    };
+    d.appendChild(img);
+  } else {                                         // pixels pruned server-side
+    d.classList.add("expired");
+    const t = document.createElement("span");
+    t.className = "txt";
+    t.textContent = "📷 screenshot (no longer stored)";
+    d.appendChild(t);
+  }
+  if (it.caption) {
+    const c = document.createElement("span");
+    c.className = "cap";
+    c.textContent = it.caption;
+    d.appendChild(c);
+  }
+  d.appendChild(timeMeta(it.ts));
+  scrollChat();
+}
+
+// a voice note's transcription: caption my own pending bubble, or (other
+// device / history replay) render it as a mic-flagged user message
+function addTranscript(text, ts) {
+  if (pendingVoice) {
+    pendingVoice.querySelector(".cap").textContent = "“" + text + "”";
+    pendingVoice = null;
+    return;
+  }
+  const d = bub("user");
+  const t = document.createElement("span");
+  t.className = "txt";
+  t.textContent = "🎤 “" + text + "”";
+  d.append(t, timeMeta(ts));
+  scrollChat();
+}
+
+function setStatusBubble(text) {
+  if (!text) {
+    if (statusBub) statusBub.remove();
+    statusBub = null;
+    return;
+  }
+  if (!statusBub) {
+    statusBub = document.createElement("div");
+    statusBub.className = "bub bot status";
+    statusBub.innerHTML =
+      '<span class="dots"><i></i><i></i><i></i></span><span class="stxt"></span>';
+  }
+  statusBub.querySelector(".stxt").textContent = text;
+  chatLog.appendChild(statusBub);
+  scrollChat();
+}
+
+function scrollChat(force) {
+  const near = chatLog.scrollHeight - chatLog.scrollTop - chatLog.clientHeight < 160;
+  if (force || near) chatLog.scrollTop = chatLog.scrollHeight;
+}
+
+// ---------- composer ----------
+function chatReady() {
+  if (chatWS && chatWS.readyState === 1) return true;
+  addInfo("⚠️ connecting to the chat — try again in a second");
+  connectChat();
+  return false;
+}
+
+function sendChatText() {
+  const f = $("chat-input");
+  const text = f.value.trim();
+  if (!text || !chatReady()) return;
+  addMsg("user", text);                            // local echo (server excludes me)
+  chatWS.send(JSON.stringify({ type: "text", text }));
+  f.value = "";
+  updateComposer();
+}
+
+function updateComposer() {
+  const has = $("chat-input").value.trim().length > 0;
+  $("btn-send").style.display = has ? "" : "none";
+  $("btn-rec").style.display = has ? "none" : "";
+}
+
+// ---------- voice notes (hold the mic, release to send) ----------
+let rec = null, recChunks = [], recWanted = false, recStartTs = 0,
+    recTick = null, recStream = null;
+
+async function startRec() {
+  if (rec) return;
+  recWanted = true;
+  try {
+    recStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  } catch (_) {
+    recWanted = false;
+    addInfo("⚠️ microphone blocked — allow mic access to send voice notes");
+    return;
+  }
+  if (!recWanted) {  // finger lifted during the permission prompt
+    recStream.getTracks().forEach((t) => t.stop());
+    recStream = null;
+    return;
+  }
+  const mime = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4"]
+    .find((m) => window.MediaRecorder && MediaRecorder.isTypeSupported(m)) || "";
+  rec = new MediaRecorder(recStream, mime ? { mimeType: mime } : undefined);
+  recChunks = [];
+  rec.ondataavailable = (ev) => { if (ev.data.size) recChunks.push(ev.data); };
+  rec.onstop = finishRec;
+  rec.start();
+  recStartTs = Date.now();
+  $("btn-rec").classList.add("rec");
+  $("rec-bar").style.display = "";
+  recTick = setInterval(() => {
+    const s = Math.floor((Date.now() - recStartTs) / 1000);
+    $("rec-time").textContent = Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0");
+    if (s >= 60) stopRec();                        // cap notes at a minute
+  }, 250);
+}
+
+function stopRec() {
+  recWanted = false;
+  if (!rec) return;
+  clearInterval(recTick);
+  $("btn-rec").classList.remove("rec");
+  $("rec-bar").style.display = "none";
+  $("rec-time").textContent = "0:00";
+  try { rec.stop(); } catch (_) {}                 // -> finishRec
+}
+
+function finishRec() {
+  const dur = Date.now() - recStartTs;
+  const blob = new Blob(recChunks, { type: (rec && rec.mimeType) || "audio/webm" });
+  if (recStream) recStream.getTracks().forEach((t) => t.stop());
+  rec = null;
+  recStream = null;
+  if (dur < 400 || blob.size < 1000) { addInfo("hold the mic to record a voice note"); return; }
+  if (!chatReady()) return;
+  const d = bub("user voice");                     // local bubble with playback
+  const au = document.createElement("audio");
+  au.controls = true;
+  au.src = URL.createObjectURL(blob);
+  const cap = document.createElement("span");
+  cap.className = "cap";
+  cap.textContent = "transcribing…";
+  d.append(au, cap, timeMeta());
+  pendingVoice = d;
+  scrollChat(true);
+  const r = new FileReader();
+  r.onload = () => {
+    const b64 = String(r.result).split(",", 2)[1] || "";
+    chatWS.send(JSON.stringify({ type: "voice", b64, mime: blob.type }));
+  };
+  r.readAsDataURL(blob);
+}
+
+const _rec = $("btn-rec");
+_rec.addEventListener("pointerdown", (e) => {
+  e.preventDefault();
+  try { _rec.setPointerCapture(e.pointerId); } catch (_) {}
+  startRec();
+});
+for (const ev of ["pointerup", "pointercancel"]) _rec.addEventListener(ev, stopRec);
+_rec.addEventListener("contextmenu", (e) => e.preventDefault());
+
 // ---------- wire up ----------
-$("btn-call").onclick = startCall;
+$("btn-chat-call").onclick = startCall;            // the call lives top-right now
+$("btn-chat-menu").onclick = () => { forceInstall = true; show("setup"); renderSetup(); };
+$("btn-send").onclick = sendChatText;
+$("chat-input").addEventListener("input", updateComposer);
+$("chat-input").addEventListener("keydown", (e) => { if (e.key === "Enter") sendChatText(); });
+$("btn-shot").onclick = () => {                    // quick action: no LLM round-trip
+  if (!chatReady()) return;
+  chatWS.send(JSON.stringify({ type: "screenshot" }));
+  localStatus = "fetching a screenshot…";
+  setStatusBubble(localStatus);
+};
+
 $("btn-again").onclick = startCall;
+$("btn-ended-chat").onclick = backToSetup;  // re-detects -> lands back in the chat
 $("btn-cancel").onclick = backToSetup;
 $("btn-hangup").onclick = backToSetup;
 

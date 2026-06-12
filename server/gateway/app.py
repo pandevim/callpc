@@ -58,6 +58,8 @@ from control.hub import router as control_router  # noqa: E402
 from tasks.runner import router as tasks_router   # noqa: E402
 import tasks.runner as task_runner                 # noqa: E402  (NARRATE hook)
 import brain                                       # noqa: E402  (persona + tools, Phase 3)
+import chat                                        # noqa: E402  (messaging, Phase 5; registers
+                                                   #              the runner EVENT bridge)
 
 HOST = os.environ.get("GATEWAY_HOST", "0.0.0.0")
 PORT = int(os.environ.get("GATEWAY_PORT", "8080"))
@@ -131,6 +133,8 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"],
                    allow_methods=["*"], allow_headers=["*"])
 app.include_router(control_router)  # /control/ws + /api/pair|devices|control/*
 app.include_router(tasks_router)    # /api/task* + /api/calibrate (debug.html)
+app.include_router(chat.router)     # /api/chat/ws (passcode checked in-handler —
+                                    # the HTTP middleware below doesn't see WS)
 
 
 @app.middleware("http")

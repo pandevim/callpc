@@ -99,6 +99,36 @@ screen pixels** — the task runner does the smart_resize mapping):
 
 Keepalive (either direction): `{"type":"ping"}` → `{"type":"pong"}`.
 
+## Chat channel (webapp ⇄ gateway, `/api/chat/ws`)
+
+Separate from the control channel above: this is the *user-facing* WhatsApp-style
+thread served by `gateway/chat.py`. Auth is the shared passcode as a query param
+(`/api/chat/ws?code=...`; HTTP middleware can't see WebSockets) — a wrong code
+closes the socket with **4401** and the page shows the passcode prompt. All open
+sockets share one conversation; the last ~150 items are replayed on connect as
+`{"type":"history","items":[...],"status":...}` (older screenshots have their
+`b64` pruned and carry `"expired": true`).
+
+```jsonc
+// client -> server
+{"type": "text",  "text": "open firefox"}
+{"type": "voice", "b64": "<webm/opus or mp4/aac>", "mime": "audio/webm"}
+{"type": "screenshot"}                       // quick action, no LLM round-trip
+
+// server -> client
+{"type": "msg", "role": "assistant", "text": "...", "ts": 1718180000}
+{"type": "image", "b64": "<png>", "caption": "how it ended up", "ts": ...}
+{"type": "transcript", "text": "what the voice note said", "ts": ...}
+{"type": "status", "text": "step 3 · clicking"}   // in-place bubble; "" hides it
+{"type": "error", "text": "..."}                   // transient, not stored
+```
+
+Update policy: task progress streams into the single `status` bubble; durable
+messages (+ a fresh screenshot) land only on milestones — finished, stuck
+(needs user input), or failed. The bridge is `tasks.runner.EVENT`, so tasks
+started from a voice call report into the chat too. Voice notes are decoded
+with PyAV and transcribed by the same Nemotron engine (`OnnxASR.transcribe`).
+
 ## Safety (executor side, per PLAN.md)
 
 Panic key kills the session; max-actions-per-minute rate limit; visible
