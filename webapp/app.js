@@ -128,6 +128,31 @@ async function detectContext() {
   const [local, online] = await Promise.all([probeLocal(), fetchOnline()]);
   ctx = { local, online };
   renderSetup();
+  maybeAutoConfigure();   // if a fresh local agent is waiting, pair it automatically
+}
+
+// A local agent is running but not paired yet -> hand it the gateway URL + a
+// fresh pairing code so it connects itself ("download, run, done"). Loopback +
+// the agent only honours this while unpaired, so it can't be hijacked later.
+let autoTried = false;
+async function maybeAutoConfigure() {
+  const l = ctx.local;
+  if (!l || l.online || l.paired) { autoTried = false; return; }  // nothing to do
+  if (autoTried) return;                                          // already sent this round
+  try {
+    const r = await fetch(API_BASE + "/api/pair/new", { method: "POST", headers: codeHeaders() });
+    if (r.status === 401) {                 // need a passcode first
+      $("setup-sub").textContent = "Enter the passcode above to finish setup.";
+      $("passcode").style.display = "";
+      return;                               // retry on the next tick once it's typed
+    }
+    const j = await r.json();
+    await fetch(`http://127.0.0.1:${LOCAL_PORT}/configure`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url: WS_URL, code: j.code }),
+    });
+    autoTried = true;   // sent; the agent will connect & pair within a couple seconds
+  } catch (_) { /* transient (e.g. probe blocked) — retry next tick */ }
 }
 
 function osLabel(d) {
@@ -140,13 +165,14 @@ function renderSetup() {
   const connected = ctx.online.length > 0;
   const dev = ctx.online[0] || null;                  // single-tenant for now
   const onThis = !!(ctx.local && ctx.local.online);   // probe says: this machine
+  const localPresent = !!ctx.local;                   // an agent is running on this machine
 
   // --- choose what to show ---
-  // INSTALL when: nothing connected, OR the user asked to set up a different one.
-  // CONNECTING when: agent running here but not yet online (auto-reconnecting).
-  // CALL when: a computer is connected (the only thing that enables calling).
-  const connecting = !connected && ctx.local && !ctx.local.online && ctx.local.paired;
-  const installView = forceInstall || (!connected && !connecting);
+  // CALL      : a computer is connected (the only thing that enables calling).
+  // CONNECTING: an agent is running here but not online yet (pairing / reconnecting).
+  // INSTALL   : no agent here and none connected, or the user asked for a new one.
+  const connecting = !connected && localPresent;
+  const installView = forceInstall || (!connected && !localPresent);
 
   $("setup-install").style.display = installView ? "" : "none";
   $("setup-call").style.display = (!installView && connected) ? "" : "none";
@@ -164,8 +190,10 @@ function renderSetup() {
     toggleLink(connected ? "← Back" : "", () => { forceInstall = false; renderSetup(); });
   } else if (connecting) {
     $("setup-emoji").textContent = "🔌";
-    $("setup-title").textContent = ctx.local.name || "Your computer";
-    $("setup-sub").textContent = "Agent is running — connecting…";
+    $("setup-title").textContent = ctx.local.name || "This computer";
+    $("setup-sub").textContent = ctx.local.paired
+      ? "Agent is running — reconnecting…"
+      : "Agent detected — connecting it…";
     toggleLink("Set up a different computer →", () => { forceInstall = true; renderSetup(); });
   } else {
     // CALL view — a computer is connected

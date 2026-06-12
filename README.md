@@ -125,21 +125,24 @@ works and never changes between jobs.)
 
 ### 2. Connect the computer you want to control
 
-Open `https://<your-url>` **on the computer you want to control**. The page is
-device-aware: with nothing connected yet it shows only the download + pairing
-instructions (no call button). Enter the passcode, grab the pairing code, and run
-the executor on that machine:
+Open `https://<your-url>` **on the computer you want to control** and just
+**download + run the agent** — no URL or pairing code to copy:
 
 ```bash
-# prebuilt binary (Releases) — or build: cargo build --release --manifest-path executor/Cargo.toml
-./callpc-executor --url wss://<your-url>/control/ws --code <PAIRING_CODE>
+# the page's "Download" button, or grab it from Releases, then:
+chmod +x callpc-executor && ./callpc-executor          # no arguments
 ```
 
-It pairs once, stores a token, and reconnects automatically afterwards. The page
-then flips to **"✓ This computer is connected"** on its own — it knows because the
-executor runs a loopback beacon (`127.0.0.1:8724`) the page quietly probes. Open the
-same URL on your phone and you'll instead see **"📞 \<name\> connected — call it"**,
-plus a *"Set up a different computer →"* link if you want to pair another machine.
+The running agent exposes a loopback beacon (`127.0.0.1:8724`); the open web page
+detects it, hands it the gateway URL + a fresh pairing code automatically, and the
+agent connects and pairs itself. The page flips to **"✓ This computer is
+connected"** on its own. It remembers the URL + token, so later runs reconnect with
+no arguments. (Scripted/headless? Pass `--url wss://<your-url>/control/ws --code
+<CODE>` to skip auto-configure; `--local-port 0` disables the beacon. Build from
+source: `cargo build --release --manifest-path executor/Cargo.toml`.)
+
+Open the same URL on your phone and you'll see **"📞 \<name\> connected — call
+it"**, plus a *"Set up a different computer →"* link to pair another machine.
 
 - **Windows / macOS / Linux-X11:** download-and-run, no fuss (unsigned-binary
   warning on Win/Mac for now).

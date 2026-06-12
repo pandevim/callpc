@@ -32,6 +32,10 @@ use tokio_tungstenite::{connect_async, tungstenite::Message};
 #[derive(Default, Serialize, Deserialize)]
 struct Conf {
     token: Option<String>,
+    // gateway URL, persisted so a paired agent reconnects with no arguments
+    // (the website's auto-configure sets this on first pair).
+    #[serde(default)]
+    url: Option<String>,
 }
 
 fn conf_path() -> PathBuf {
@@ -133,10 +137,16 @@ async fn run(
     match reply.get("type").and_then(Value::as_str) {
         Some("paired") => {
             conf.token = reply.get("token").and_then(Value::as_str).map(String::from);
+            conf.url = Some(url.to_string()); // remember where to reconnect, no args next time
             save_conf(&conf)?;
             println!("[exec] paired! token stored in {}", conf_path().display());
         }
-        Some("ready") => {}
+        Some("ready") => {
+            if conf.url.as_deref() != Some(url) {
+                conf.url = Some(url.to_string());
+                save_conf(&conf)?;
+            }
+        }
         _ => bail!("rejected: {reply}"),
     }
     println!("[exec] online as {name} ({}, {w}x{h}) — waiting for requests", os_name());
@@ -219,8 +229,10 @@ fn merge(into: &mut Value, from: &Value) {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let mut url = std::env::var("CALLPC_URL")
-        .unwrap_or_else(|_| "ws://127.0.0.1:8723/control/ws".into());
+    // URL resolution: --url > CALLPC_URL env > persisted conf.url > none.
+    // With none (and no stored token) the agent idles and waits for the website
+    // to auto-configure it via the local beacon — "download, run, done".
+    let mut url: Option<String> = std::env::var("CALLPC_URL").ok();
     let mut code: Option<String> = None;
     let mut once = false;
     // Loopback presence beacon: lets the call page detect it's open ON this
@@ -234,7 +246,7 @@ async fn main() -> Result<()> {
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
-            "--url" => { i += 1; url = args.get(i).cloned().context("--url needs a value")?; }
+            "--url" => { i += 1; url = Some(args.get(i).cloned().context("--url needs a value")?); }
             "--code" => { i += 1; code = Some(args.get(i).cloned().context("--code needs a value")?); }
             "--local-port" => {
                 i += 1;
@@ -243,8 +255,9 @@ async fn main() -> Result<()> {
             }
             "--once" => once = true,
             "-h" | "--help" => {
-                println!("callpc-executor --url wss://<host>/control/ws [--code ABC123] \
-                          [--local-port 8724] [--once]");
+                println!("callpc-executor [--url wss://<host>/control/ws] [--code ABC123] \
+                          [--local-port 8724] [--once]\n\
+                          With no --url/--code, run it and pair from the website (auto-configure).");
                 return Ok(());
             }
             other => bail!("unknown argument {other:?}"),
@@ -255,15 +268,22 @@ async fn main() -> Result<()> {
     // rustls 0.23 no longer auto-selects a crypto backend (panics otherwise).
     let _ = rustls::crypto::ring::default_provider().install_default();
 
+    let conf = load_conf();
+    if url.is_none() {
+        url = conf.url.clone(); // a previously-paired agent reconnects with no args
+    }
+
     let (sw, sh) = screen::size().unwrap_or((1920, 1080));
     let input = input::InputThread::spawn(sw, sh);
 
-    // local presence beacon (loopback only)
+    // local presence beacon (loopback only) + the auto-configure channel
     let online = Arc::new(AtomicBool::new(false));
+    let configured = Arc::new(AtomicBool::new(conf.token.is_some()));
     let distro = local::distro();
+    let (cfg_tx, mut cfg_rx) = tokio::sync::mpsc::unbounded_channel::<(String, String)>();
     tokio::spawn(local::serve(
         local_port,
-        online.clone(),
+        local::BeaconState { online: online.clone(), configured: configured.clone(), cfg_tx },
         local::BeaconInfo {
             name: gethostname::gethostname().to_string_lossy().into_owned(),
             os: os_name(),
@@ -275,7 +295,17 @@ async fn main() -> Result<()> {
 
     let mut backoff = 2u64;
     loop {
-        match run(&url, code.as_deref(), &input, &online, &distro).await {
+        // Nothing to connect with (no url, never paired) -> wait for the website
+        // to POST /configure to the beacon, which arrives on cfg_rx.
+        if url.is_none() && load_conf().token.is_none() {
+            println!("[exec] waiting to be configured — open callpc in a browser on this computer");
+            match cfg_rx.recv().await {
+                Some((u, c)) => { url = Some(u); code = Some(c); }
+                None => return Ok(()), // beacon gone; nothing more to do
+            }
+        }
+        let target = url.clone().expect("url set above");
+        match run(&target, code.as_deref(), &input, &online, &distro).await {
             Ok(()) => {
                 backoff = 2; // clean close (server restart) — retry soon
             }
@@ -283,6 +313,9 @@ async fn main() -> Result<()> {
         }
         online.store(false, Ordering::Relaxed); // connection dropped
         code = None; // a redeemed pair code must never be replayed
+        // a /configure that arrived during the session re-targets us
+        while let Ok((u, c)) = cfg_rx.try_recv() { url = Some(u); code = Some(c); }
+        if url.is_none() { url = load_conf().url; }
         if once {
             return Ok(());
         }

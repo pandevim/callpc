@@ -47,15 +47,32 @@ HTTP server bound to **loopback only**: `127.0.0.1:8724` (override with
 ```
 GET http://127.0.0.1:8724/whoami
 -> {"callpc": true, "name": "...", "os": "...", "distro": "...",
-    "screen_w": 1920, "screen_h": 1080, "paired": true, "online": true}
+    "screen_w": 1920, "screen_h": 1080,
+    "paired": true, "configured": true, "online": true}
 ```
 
 `online` mirrors the live gateway WebSocket; `paired` is whether a device token
-is stored. Every response (and the `OPTIONS` preflight) carries CORS plus
-`Access-Control-Allow-Private-Network: true`, so an HTTPS page may probe it
+is stored; `configured` is whether a connect target (URL) is known. Every
+response (and the `OPTIONS` preflight) carries CORS plus
+`Access-Control-Allow-Private-Network: true`, so an HTTPS page may reach it
 (loopback is a "potentially trustworthy" origin, so this is not mixed content).
-This signal only refines the landing UI — it gates nothing — so a browser that
-blocks it simply falls back to `/api/devices`.
+The `/whoami` signal only refines the landing UI — it gates nothing — so a
+browser that blocks it simply falls back to `/api/devices`.
+
+### Auto-configure (so the user never types a URL or code)
+
+If the agent is running but **unpaired** (`paired:false`), the page hands it the
+gateway URL + a fresh pairing code; the agent then connects and pairs itself:
+
+```
+POST http://127.0.0.1:8724/configure   {"url": "wss://<host>/control/ws", "code": "AB3K9Q"}
+-> {"ok": true}                         (or {"ok": false, "error": "already paired"})
+```
+
+The agent only honours `/configure` while it has no stored token, so a loopback
+page can't re-target an already-paired agent. On success the URL is persisted, so
+later runs reconnect with **no arguments at all**. Run with `--url`/`--code` to
+skip auto-configure (scripted/headless), or `--local-port 0` to disable the beacon.
 
 ## Requests (server → executor; every request carries an `id`,
 ## every reply echoes it)
