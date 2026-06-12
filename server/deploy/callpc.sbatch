@@ -215,6 +215,8 @@ if [ "$ENABLE_GATEWAY" = 1 ]; then
         APPTAINERENV_TTS_WS_URL="off"
     fi
     export APPTAINERENV_TTS_WS_URL
+    # Shared passcode gate (ACCESS_CODE from the job env, e.g. ~/.callpc.env).
+    [ -n "${ACCESS_CODE:-}" ] && export APPTAINERENV_ACCESS_CODE="$ACCESS_CODE"
     APPTAINERENV_GATEWAY_PORT="$GATEWAY_PORT" \
     APPTAINERENV_ORT_INTRA_OP_THREADS="$(nproc)" \
     APPTAINERENV_BRAIN_BASE_URL="http://127.0.0.1:$BRAIN_PORT/v1" \

@@ -16,7 +16,7 @@ import os
 import sys
 
 from aiortc import RTCIceServer
-from fastapi import BackgroundTasks, FastAPI
+from fastapi import BackgroundTasks, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -68,6 +68,29 @@ STT_LANG = os.environ.get("STT_LANG", "en-US")
 TTS_WS_URL = os.environ.get("TTS_WS_URL", "ws://127.0.0.1:8089")
 TTS_ENABLED = TTS_WS_URL.lower() not in ("", "off", "0", "none")
 
+# Shared passcode: anyone with the public URL can otherwise place a call or
+# control a paired computer. Set ACCESS_CODE in the job env to require it on
+# every state-changing endpoint (the call page / connect page / debug page send
+# it as the X-Callpc-Code header). Unset = open (dev only) with a startup warn.
+# The executor's own WS auth (pairing code -> device token) is independent.
+ACCESS_CODE = os.environ.get("ACCESS_CODE", "").strip()
+
+
+def _is_protected(method: str, path: str) -> bool:
+    """Action endpoints that require the passcode (pure reads stay open so the
+    page can bootstrap ICE/status before the user types the code)."""
+    if path.startswith("/api/control/"):
+        return True
+    if path == "/api/offer" and method == "POST":
+        return True
+    if path == "/api/pair/new" and method == "POST":
+        return True
+    if path == "/api/calibrate" and method == "POST":
+        return True
+    if path == "/api/task" and method in ("POST", "DELETE"):
+        return True
+    return False
+
 # Brain: the Qwen orchestrator served by vLLM (OpenAI-compatible). In the
 # launcher it's on the same node at :8001; vLLM ignores the api_key.
 BRAIN_BASE_URL = os.environ.get("BRAIN_BASE_URL", "http://127.0.0.1:8001/v1")
@@ -108,6 +131,15 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"],
                    allow_methods=["*"], allow_headers=["*"])
 app.include_router(control_router)  # /control/ws + /api/pair|devices|control/*
 app.include_router(tasks_router)    # /api/task* + /api/calibrate (debug.html)
+
+
+@app.middleware("http")
+async def access_gate(request: Request, call_next):
+    """Reject state-changing requests without the right passcode (when set)."""
+    if ACCESS_CODE and _is_protected(request.method, request.url.path):
+        if request.headers.get("x-callpc-code", "") != ACCESS_CODE:
+            return JSONResponse({"error": "passcode required or incorrect"}, status_code=401)
+    return await call_next(request)
 _connections: dict[str, SmallWebRTCConnection] = {}  # pc_id -> connection
 _tasks: dict[str, PipelineTask] = {}                  # pc_id -> running pipeline
 
@@ -259,8 +291,9 @@ async def health():
 
 @app.get("/api/config")
 async def api_config():
-    """Client bootstrap: ICE servers (incl. TURN creds when configured)."""
-    return {"ice_servers": ICE_CONFIG}
+    """Client bootstrap: ICE servers (incl. TURN creds when configured) +
+    whether a passcode is required (so the page knows to prompt)."""
+    return {"ice_servers": ICE_CONFIG, "auth_required": bool(ACCESS_CODE)}
 
 
 @app.post("/api/offer")
@@ -366,5 +399,10 @@ if __name__ == "__main__":
     stt_nemotron._get_engine(STT_LANG, None)
 
     tts_info = TTS_WS_URL if TTS_ENABLED else "DISABLED (text-only)"
+    if ACCESS_CODE:
+        print(f"[gateway] access passcode REQUIRED ({len(ACCESS_CODE)} chars)", flush=True)
+    else:
+        print("[gateway] WARNING: ACCESS_CODE unset — anyone with the URL can call "
+              "and control a paired computer. Set ACCESS_CODE to lock it down.", flush=True)
     print(f"[gateway] starting on {HOST}:{PORT} (STT lang={STT_LANG}, TTS {tts_info})", flush=True)
     uvicorn.run(app, host=HOST, port=PORT)

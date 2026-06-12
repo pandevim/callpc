@@ -43,6 +43,14 @@
   <h1>Connect this computer</h1>
   <p class="sub">Install the tiny callpc agent so you can control this machine by phone. It connects out to callpc — no inbound ports, nothing exposed.</p>
 
+  <div class="card" id="auth-card" style="display:none">
+    <h2 style="font-size:1.05rem;margin-bottom:8px">Passcode</h2>
+    <input id="passcode" type="password" inputmode="numeric" placeholder="enter passcode"
+           autocomplete="off" style="width:100%;padding:10px 14px;border-radius:8px;
+           border:1px solid #344;background:#161c2e;color:#eef1f7;font-size:1rem">
+    <div class="muted">Required to generate a pairing code.</div>
+  </div>
+
   <div class="card" id="online">
     <h2><span class="dot"></span>Connected!</h2>
     <p class="sub" style="margin:6px 0 0" id="online-name">This computer is online and ready. Call in and ask it to do something.</p>
@@ -127,15 +135,37 @@ function renderCmd() {
   $("run-note").textContent = os.note;
 }
 
+// shared passcode (gate on /api/pair/new); persisted across the call/connect pages
+const accessHeaders = () => {
+  const c = ($("passcode")?.value || localStorage.getItem("callpc_code") || "").trim();
+  return c ? { "X-Callpc-Code": c } : {};
+};
+
 async function getCode() {
   try {
-    const r = await fetch(API_BASE + "/api/pair/new", { method: "POST" });
+    const r = await fetch(API_BASE + "/api/pair/new", { method: "POST", headers: accessHeaders() });
+    if (r.status === 401) { $("code").textContent = "passcode?"; $("ttl").textContent = "—"; return; }
     const j = await r.json();
     pairCode = j.code;
     $("code").textContent = pairCode;
     renderCmd();
     startTtl(j.expires_in || 600);
   } catch (e) { $("code").textContent = "error"; }
+}
+
+async function probeAuth() {
+  try {
+    const cfg = await (await fetch(API_BASE + "/api/config")).json();
+    if (cfg.auth_required) {
+      $("auth-card").style.display = "";
+      const f = $("passcode");
+      f.value = localStorage.getItem("callpc_code") || "";
+      f.addEventListener("input", () => {
+        localStorage.setItem("callpc_code", f.value.trim());
+        clearTimeout(window._pcDeb); window._pcDeb = setTimeout(getCode, 500);
+      });
+    }
+  } catch (_) {}
 }
 
 let ttlH = null;
@@ -166,7 +196,7 @@ document.querySelectorAll(".copy").forEach(b => b.onclick = () => {
 });
 
 renderOS();
-getCode();
+probeAuth().then(getCode);
 pollOnline();
 setInterval(pollOnline, 2500);
 </script>

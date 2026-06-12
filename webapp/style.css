@@ -94,6 +94,10 @@ body {
 .dark.engaged svg { fill: #15192b; }
 
 .hint { color: #93a0b8; font-size: .85rem; }
+.passcode { margin-top: 18px; padding: 10px 16px; border-radius: 10px; border: 1px solid #344;
+  background: #161c2e; color: #eef1f7; font-size: 1rem; text-align: center; width: 180px;
+  letter-spacing: 3px; }
+.passcode::placeholder { letter-spacing: normal; color: #6b7896; }
 .connect-link { color: #6b7896; font-size: .85rem; text-decoration: none; margin-top: 22px; }
 .connect-link:hover { color: #93a0b8; }
 

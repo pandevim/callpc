@@ -16,6 +16,16 @@ const API_BASE = (() => {
 })();
 
 const $ = (id) => document.getElementById(id);
+
+// ---------- passcode (shared access gate) ----------
+const getCode = () => (localStorage.getItem("callpc_code") || "").trim();
+const setCode = (c) => localStorage.setItem("callpc_code", (c || "").trim());
+// header for protected fetches; the gateway checks X-Callpc-Code when ACCESS_CODE is set
+const codeHeaders = () => {
+  const c = ($("passcode")?.value || getCode()).trim();
+  return c ? { "X-Callpc-Code": c } : {};
+};
+let authRequired = false;
 const screens = {
   idle: $("screen-idle"),
   ringing: $("screen-ringing"),
@@ -152,13 +162,29 @@ function watchMicAudio(stream) {
   } catch (_) { /* visual nicety only */ }
 }
 
-// ---------- ICE config ----------
+// ---------- ICE config + auth probe ----------
 async function iceServers() {
   try {
     const r = await fetch(API_BASE + "/api/config");
-    if (r.ok) return (await r.json()).ice_servers;
+    if (r.ok) {
+      const cfg = await r.json();
+      return cfg.ice_servers;
+    }
   } catch (_) { /* fall through */ }
   return [{ urls: "stun:stun.l.google.com:19302" }];
+}
+
+async function probeAuth() {
+  try {
+    const cfg = await (await fetch(API_BASE + "/api/config")).json();
+    authRequired = !!cfg.auth_required;
+  } catch (_) { authRequired = false; }
+  if (authRequired) {
+    const f = $("passcode");
+    f.style.display = "";
+    f.value = getCode();
+    f.addEventListener("input", () => setCode(f.value));
+  }
 }
 
 // ---------- call lifecycle ----------
@@ -219,11 +245,13 @@ async function startCall() {
     });
 
     setRingStatus("ringing…");
+    if (authRequired) setCode($("passcode").value);
     const r = await fetch(API_BASE + "/api/offer", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...codeHeaders() },
       body: JSON.stringify({ sdp: pc.localDescription.sdp, type: pc.localDescription.type }),
     });
+    if (r.status === 401) return endCall("Wrong passcode", "Check the passcode and try again.");
     if (!r.ok) return endCall("Couldn't reach your computer", `gateway answered HTTP ${r.status}`);
     await pc.setRemoteDescription(await r.json());
     // connectionstatechange flips to the in-call screen when media lands
@@ -293,3 +321,5 @@ $("btn-call").onclick = startCall;
 $("btn-again").onclick = startCall;
 $("btn-cancel").onclick = () => endCall("Call cancelled", "");
 $("btn-hangup").onclick = () => endCall("Call ended", "");
+
+probeAuth();  // reveal the passcode field if the gateway requires one

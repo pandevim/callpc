@@ -42,7 +42,20 @@
 
 <script>
 const $ = id => document.getElementById(id);
-const api = (p, opt) => fetch(p, opt).then(r => r.json());
+// passcode (shared with the call/connect pages); prompt once if the gateway needs it
+function codeHeaders(json) {
+  const h = json ? { "Content-Type": "application/json" } : {};
+  const c = (localStorage.getItem("callpc_code") || "").trim();
+  if (c) h["X-Callpc-Code"] = c;
+  return h;
+}
+const api = (p, opt) => fetch(p, opt).then(async r => {
+  if (r.status === 401) {
+    const c = prompt("Passcode:");
+    if (c) { localStorage.setItem("callpc_code", c.trim()); }
+  }
+  return r.json();
+});
 
 let timer = null;
 let lastRendered = "";
@@ -86,15 +99,15 @@ $("run").onclick = async () => {
   const instruction = $("instruction").value.trim();
   if (!instruction) return;
   const r = await api("/api/task", { method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: codeHeaders(true),
     body: JSON.stringify({ instruction }) });
   if (r.error) $("status").textContent = r.error;
 };
-$("cancel").onclick = () => api("/api/task", { method: "DELETE" });
+$("cancel").onclick = () => api("/api/task", { method: "DELETE", headers: codeHeaders(false) });
 $("calib").onclick = async () => {
   $("status").textContent = "calibrating (several model calls)...";
   const r = await api("/api/calibrate", { method: "POST",
-    headers: { "Content-Type": "application/json" }, body: "{}" });
+    headers: codeHeaders(true), body: "{}" });
   $("status").textContent = "calibration: " + JSON.stringify(r);
 };
 
