@@ -23,6 +23,8 @@ smart_resize mismatch immediately, before a real desktop is involved.
 """
 import asyncio
 import base64
+import json
+import os
 import time
 
 from fastapi import APIRouter
@@ -32,6 +34,11 @@ from control.hub import hub
 from tasks.uitars_client import UITarsClient, box_center_px, to_protocol
 
 MAX_STEPS = 15
+# Per-task audit trail: screenshots + a transcript.json under server/.state/tasks
+# (gitignored). Set TASK_LOG=0 to disable. Each run gets its own timestamped dir.
+TASK_LOG = os.environ.get("TASK_LOG", "1") not in ("0", "false", "False", "")
+LOG_ROOT = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".state", "tasks")
 NARRATE = None  # Phase 3: app.py sets this per call to a coroutine(text) that
                 # queues a TTSSpeakFrame — spoken narration between actions.
 
@@ -79,6 +86,7 @@ class TaskRunner:
         self._task: asyncio.Task | None = None
         self._last_phrase = ""       # narration dedupe
         self._suppressed = 0
+        self._log_dir = None         # this run's audit dir (server/.state/tasks/<ts>)
 
     # ---------------- public API ----------------
 
@@ -99,8 +107,39 @@ class TaskRunner:
         self.state, self.instruction, self.detail = "running", instruction, ""
         self.steps, self._turns = [], []
         self._last_phrase, self._suppressed = "", 0
+        self._log_dir = None
+        if TASK_LOG:
+            try:
+                self._log_dir = os.path.join(LOG_ROOT, time.strftime("%Y%m%d-%H%M%S"))
+                os.makedirs(self._log_dir, exist_ok=True)
+            except Exception as e:  # noqa: BLE001 — logging must never block a task
+                print(f"[task] log dir failed: {e}", flush=True)
+                self._log_dir = None
         self._task = asyncio.get_running_loop().create_task(self._run(instruction))
         return {"ok": True}
+
+    def _write_log(self):
+        """Persist the step trail (thoughts/actions/results) + screenshots for
+        this run. Called as steps complete and at the end."""
+        if not self._log_dir:
+            return
+        try:
+            for s in self.steps:
+                p = os.path.join(self._log_dir, f"step{s['n']:02d}.png")
+                if "png_b64" in s and not os.path.exists(p):
+                    with open(p, "wb") as f:
+                        f.write(base64.b64decode(s["png_b64"]))
+            with open(os.path.join(self._log_dir, "transcript.json"), "w") as f:
+                json.dump({
+                    "instruction": self.instruction,
+                    "state": self.state,
+                    "detail": self.detail,
+                    "steps": [{k: s[k] for k in
+                               ("n", "thought", "action_text", "dispatched", "result")}
+                              for s in self.steps],
+                }, f, indent=2)
+        except Exception as e:  # noqa: BLE001
+            print(f"[task] log write failed: {e}", flush=True)
 
     async def cancel(self) -> dict:
         if self._task and not self._task.done():
@@ -150,6 +189,7 @@ class TaskRunner:
                 self.steps.append(step)
                 self._turns.append({"sent_b64": sent_b64, "response": text})
                 print(f"[task] step {n}: {step['action_text'][:120]}", flush=True)
+                self._write_log()  # persist incrementally so a crash still leaves a trail
 
                 for action in actions:
                     kind = action["action_type"]
@@ -190,6 +230,10 @@ class TaskRunner:
             self.state, self.detail = "failed", f"{type(e).__name__}: {e}"
             print(f"[task] failed: {self.detail}", flush=True)
             await _say("I hit a problem and had to stop the task.")
+        finally:
+            self._write_log()  # final state (finished/failed/needs_user) + all shots
+            if self._log_dir:
+                print(f"[task] trail saved -> {self._log_dir}", flush=True)
 
 
 runner = TaskRunner()
