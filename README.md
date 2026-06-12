@@ -114,6 +114,10 @@ cat > ~/.callpc.env <<'ENV'
 # optional operator master key — normal users never need it: each computer's
 # passcode is shown by the executor running on it. ACCESS_CODE=none disables.
 export ACCESS_CODE=<choose-a-passcode>
+# optional — authenticated HF Hub requests (higher rate limits, faster
+# weight downloads); both callpc.sbatch and prefetch_weights.sbatch pass it
+# into the containers when set
+export HF_TOKEN=<your-hf-token>
 export NGROK_AUTHTOKEN=<your-token>
 export NGROK_DOMAIN=<your>.ngrok-free.dev      # bare hostname
 export TURN_URL="turn:global.relay.metered.ca:80,turn:global.relay.metered.ca:443,turns:global.relay.metered.ca:443?transport=tcp"
