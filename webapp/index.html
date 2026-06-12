@@ -10,22 +10,44 @@
 <body>
   <main id="phone">
 
-    <!-- ============ idle / dial screen ============ -->
-    <section id="screen-idle" class="screen active">
+    <!-- ============ setup / gate screen (device-aware landing) ============ -->
+    <!-- One screen, several sub-views toggled by app.js depending on whether a
+         computer is connected and whether we're open ON that computer. -->
+    <section id="screen-setup" class="screen setup active">
       <div class="callee">
-        <div class="avatar"><span>💻</span></div>
-        <h1>My Computer</h1>
-        <p class="sub">callpc · voice control</p>
+        <div class="avatar" id="setup-avatar"><span id="setup-emoji">💻</span></div>
+        <h1 id="setup-title">My Computer</h1>
+        <p class="sub" id="setup-sub">checking connection…</p>
+        <input id="passcode" class="passcode" type="password" inputmode="numeric"
+               placeholder="passcode" autocomplete="off" style="display:none">
       </div>
-      <div class="actions">
+
+      <!-- CALL action — shown only when a computer is actually online -->
+      <div class="actions" id="setup-call" style="display:none">
         <button id="btn-call" class="round green" aria-label="Call">
           <svg viewBox="0 0 24 24"><path d="M6.6 10.8c1.4 2.8 3.8 5.1 6.6 6.6l2.2-2.2c.3-.3.7-.4 1-.2 1.1.4 2.3.6 3.6.6.6 0 1 .4 1 1V20c0 .6-.4 1-1 1C10.6 21 3 13.4 3 4c0-.6.4-1 1-1h3.5c.6 0 1 .4 1 1 0 1.2.2 2.4.6 3.6.1.3 0 .7-.2 1l-2.3 2.2z"/></svg>
         </button>
-        <span class="hint">call</span>
-        <input id="passcode" class="passcode" type="password" inputmode="numeric"
-               placeholder="passcode" autocomplete="off" style="display:none">
-        <a href="connect.html" class="connect-link">Connect a computer to control →</a>
+        <span class="hint" id="call-hint">call</span>
       </div>
+
+      <!-- INSTALL panel — shown when no computer is connected (or "set up a different computer") -->
+      <div class="install" id="setup-install" style="display:none">
+        <div class="card">
+          <h2>1 · Download the agent</h2>
+          <div class="os-tabs" id="os-tabs"></div>
+          <a class="dl" id="dl" href="#" target="_blank" rel="noopener">Download</a>
+          <div class="muted" id="dl-note"></div>
+        </div>
+        <div class="card">
+          <h2>2 · Run it with this pairing code</h2>
+          <div class="code" id="code">······</div>
+          <p class="pair-note">expires in <span id="ttl">10:00</span> · pairs this computer once, then remembers it</p>
+          <pre id="cmd"><button class="copy" data-copy="cmd">copy</button><span id="cmd-text">loading…</span></pre>
+          <div class="muted" id="run-note"></div>
+        </div>
+      </div>
+
+      <a href="#" id="setup-toggle" class="connect-link" style="display:none"></a>
     </section>
 
     <!-- ============ ringing screen ============ -->

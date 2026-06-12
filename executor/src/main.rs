@@ -13,6 +13,7 @@
 //! visible "being controlled" indicator for v1.
 
 mod input;
+mod local;
 mod screen;
 #[cfg(target_os = "linux")]
 mod uinput;
@@ -23,6 +24,8 @@ use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 
@@ -82,7 +85,13 @@ impl RateLimit {
     }
 }
 
-async fn run(url: &str, code: Option<&str>, input: &input::InputThread) -> Result<()> {
+async fn run(
+    url: &str,
+    code: Option<&str>,
+    input: &input::InputThread,
+    online: &Arc<AtomicBool>,
+    distro: &str,
+) -> Result<()> {
     let mut conf = load_conf();
     let code = if conf.token.is_some() {
         if code.is_some() {
@@ -99,7 +108,8 @@ async fn run(url: &str, code: Option<&str>, input: &input::InputThread) -> Resul
 
     let (w, h) = screen::size().unwrap_or((0, 0));
     let name = gethostname::gethostname().to_string_lossy().into_owned();
-    let info = json!({"name": name, "os": os_name(), "screen_w": w, "screen_h": h});
+    let info = json!({"name": name, "os": os_name(), "distro": distro,
+                      "screen_w": w, "screen_h": h});
 
     // pair or hello
     let first = if let Some(code) = code {
@@ -130,6 +140,7 @@ async fn run(url: &str, code: Option<&str>, input: &input::InputThread) -> Resul
         _ => bail!("rejected: {reply}"),
     }
     println!("[exec] online as {name} ({}, {w}x{h}) — waiting for requests", os_name());
+    online.store(true, Ordering::Relaxed); // beacon now reports a live connection
 
     let mut rate = RateLimit { window: Vec::new() };
 
@@ -212,6 +223,12 @@ async fn main() -> Result<()> {
         .unwrap_or_else(|_| "ws://127.0.0.1:8723/control/ws".into());
     let mut code: Option<String> = None;
     let mut once = false;
+    // Loopback presence beacon: lets the call page detect it's open ON this
+    // machine. 0 disables. CALLPC_LOCAL_PORT overrides; --local-port wins.
+    let mut local_port: u16 = std::env::var("CALLPC_LOCAL_PORT")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(8724);
 
     let args: Vec<String> = std::env::args().skip(1).collect();
     let mut i = 0;
@@ -219,9 +236,15 @@ async fn main() -> Result<()> {
         match args[i].as_str() {
             "--url" => { i += 1; url = args.get(i).cloned().context("--url needs a value")?; }
             "--code" => { i += 1; code = Some(args.get(i).cloned().context("--code needs a value")?); }
+            "--local-port" => {
+                i += 1;
+                local_port = args.get(i).context("--local-port needs a value")?
+                    .parse().context("--local-port must be a number (0 disables)")?;
+            }
             "--once" => once = true,
             "-h" | "--help" => {
-                println!("callpc-executor --url wss://<host>/control/ws [--code ABC123] [--once]");
+                println!("callpc-executor --url wss://<host>/control/ws [--code ABC123] \
+                          [--local-port 8724] [--once]");
                 return Ok(());
             }
             other => bail!("unknown argument {other:?}"),
@@ -234,14 +257,31 @@ async fn main() -> Result<()> {
 
     let (sw, sh) = screen::size().unwrap_or((1920, 1080));
     let input = input::InputThread::spawn(sw, sh);
+
+    // local presence beacon (loopback only)
+    let online = Arc::new(AtomicBool::new(false));
+    let distro = local::distro();
+    tokio::spawn(local::serve(
+        local_port,
+        online.clone(),
+        local::BeaconInfo {
+            name: gethostname::gethostname().to_string_lossy().into_owned(),
+            os: os_name(),
+            distro: distro.clone(),
+            screen_w: sw,
+            screen_h: sh,
+        },
+    ));
+
     let mut backoff = 2u64;
     loop {
-        match run(&url, code.as_deref(), &input).await {
+        match run(&url, code.as_deref(), &input, &online, &distro).await {
             Ok(()) => {
                 backoff = 2; // clean close (server restart) — retry soon
             }
             Err(e) => eprintln!("[exec] connection lost: {e:#}"),
         }
+        online.store(false, Ordering::Relaxed); // connection dropped
         code = None; // a redeemed pair code must never be replayed
         if once {
             return Ok(());

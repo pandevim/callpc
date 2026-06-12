@@ -1,11 +1,18 @@
-/* callpc call UI — raw WebRTC against the gateway's /api/offer.
+/* callpc call UI — device-aware landing + raw WebRTC against /api/offer.
+ *
+ * The landing is a single "setup" screen that adapts to context:
+ *   - Is a computer connected & callable?  -> authoritative: GET /api/devices.
+ *     This (and only this) decides whether the Call button appears.
+ *   - Am I open ON that computer?          -> best-effort: a loopback probe of
+ *     the executor's beacon (http://127.0.0.1:8724/whoami). Used only to refine
+ *     wording ("This computer" vs "<name> — call it"). Gates nothing, so a
+ *     blocked/failed probe is harmless.
+ * No computer connected -> hide calling, show download + pairing instructions.
  *
  * API base resolution (first hit wins):
  *   1. ?api=https://xyz.ngrok.app   (static-host deployment pointing at ngrok)
  *   2. window.CALLPC_API_BASE       (optional config.js on a static host)
  *   3. same origin                  (the gateway serves this app itself)
- * ICE servers come from GET /api/config (the gateway injects TURN creds there),
- * with a STUN-only fallback if that endpoint is unreachable.
  */
 "use strict";
 
@@ -15,19 +22,25 @@ const API_BASE = (() => {
   return base.replace(/\/+$/, "");
 })();
 
+// the executor's loopback presence beacon (override with ?localport=)
+const LOCAL_PORT = new URLSearchParams(location.search).get("localport") || "8724";
+const REPO = "https://github.com/pandevim/callpc";
+// WSS control URL the executor connects to (http(s)->ws(s))
+const WS_URL = (API_BASE || location.origin).replace(/^http/, "ws") + "/control/ws";
+
 const $ = (id) => document.getElementById(id);
 
-// ---------- passcode (shared access gate) ----------
-const getCode = () => (localStorage.getItem("callpc_code") || "").trim();
+// ---------- passcode (shared access gate; used for both pairing and calling) ----------
+const getStoredCode = () => (localStorage.getItem("callpc_code") || "").trim();
 const setCode = (c) => localStorage.setItem("callpc_code", (c || "").trim());
-// header for protected fetches; the gateway checks X-Callpc-Code when ACCESS_CODE is set
 const codeHeaders = () => {
-  const c = ($("passcode")?.value || getCode()).trim();
+  const c = ($("passcode")?.value || getStoredCode()).trim();
   return c ? { "X-Callpc-Code": c } : {};
 };
 let authRequired = false;
+
 const screens = {
-  idle: $("screen-idle"),
+  setup: $("screen-setup"),
   ringing: $("screen-ringing"),
   call: $("screen-call"),
   ended: $("screen-ended"),
@@ -61,6 +74,190 @@ function show(name) {
 
 function setRingStatus(msg) { $("ring-status").textContent = msg; }
 
+// ====================================================================
+//  Device-aware landing
+// ====================================================================
+const OSES = {
+  windows: { label: "Windows", asset: "callpc-executor-windows-x64.exe",
+    run: (exe) => `${exe} --url ${WS_URL} --code CODE`,
+    note: "Double-click won't pass the code — run it from PowerShell. SmartScreen may warn (unsigned): More info → Run anyway." },
+  macos: { label: "macOS", asset: "callpc-executor-macos-universal",
+    run: (exe) => `chmod +x ${exe} && ${exe} --url ${WS_URL} --code CODE`,
+    note: "First run: right-click the file → Open (unsigned). Approve Screen Recording + Accessibility when asked." },
+  linux: { label: "Linux", asset: "callpc-executor-linux-x64",
+    run: (exe) => `chmod +x ${exe} && ./${exe} --url ${WS_URL} --code CODE`,
+    note: "Wayland (GNOME/KDE): approve the screen-share prompt. Input needs the 'input' group / uinput access." },
+};
+
+let currentOS = detectOS();   // for the install instructions
+let pairCode = "······";
+// user tapped "set up a different computer" (or arrived via connect.html?setup=1)
+let forceInstall = new URLSearchParams(location.search).get("setup") === "1";
+let ctx = { local: null, online: [] };  // last detectContext() result
+
+function detectOS() {
+  const p = (navigator.userAgentData?.platform || navigator.platform || navigator.userAgent).toLowerCase();
+  if (p.includes("win")) return "windows";
+  if (p.includes("mac") || p.includes("iphone") || p.includes("ipad")) return "macos";
+  return "linux";
+}
+
+const isMobile = () => /android|iphone|ipad|ipod|mobile/i.test(navigator.userAgent);
+
+// loopback probe: are we open ON the controlled computer? returns whoami | null
+async function probeLocal() {
+  try {
+    const ac = new AbortController();
+    const t = setTimeout(() => ac.abort(), 1000);
+    const r = await fetch(`http://127.0.0.1:${LOCAL_PORT}/whoami`, { signal: ac.signal });
+    clearTimeout(t);
+    if (!r.ok) return null;
+    const j = await r.json();
+    return j && j.callpc ? j : null;
+  } catch (_) { return null; }   // refused/blocked/timeout -> not this machine
+}
+
+async function fetchOnline() {
+  try {
+    const j = await (await fetch(API_BASE + "/api/devices")).json();
+    return j.online || [];
+  } catch (_) { return []; }
+}
+
+async function detectContext() {
+  const [local, online] = await Promise.all([probeLocal(), fetchOnline()]);
+  ctx = { local, online };
+  renderSetup();
+}
+
+function osLabel(d) {
+  // prefer the human distro string ("Ubuntu 24.04"), else the os family
+  if (!d) return "";
+  return d.distro || ({ linux: "Linux", macos: "macOS", windows: "Windows" }[d.os] || d.os || "");
+}
+
+function renderSetup() {
+  const connected = ctx.online.length > 0;
+  const dev = ctx.online[0] || null;                  // single-tenant for now
+  const onThis = !!(ctx.local && ctx.local.online);   // probe says: this machine
+
+  // --- choose what to show ---
+  // INSTALL when: nothing connected, OR the user asked to set up a different one.
+  // CONNECTING when: agent running here but not yet online (auto-reconnecting).
+  // CALL when: a computer is connected (the only thing that enables calling).
+  const connecting = !connected && ctx.local && !ctx.local.online && ctx.local.paired;
+  const installView = forceInstall || (!connected && !connecting);
+
+  $("setup-install").style.display = installView ? "" : "none";
+  $("setup-call").style.display = (!installView && connected) ? "" : "none";
+
+  if (installView) {
+    $("setup-emoji").textContent = "⬇️";
+    $("setup-title").textContent = forceInstall ? "Set up another computer" : "Set up your computer";
+    $("setup-sub").textContent = forceInstall
+      ? "Download and run the agent on the computer you want to control."
+      : (isMobile()
+          ? "Open this page on the computer you want to control, or set it up here."
+          : "Install the tiny agent so this computer can be controlled by phone.");
+    renderInstall();
+    // footer: a way back when something is already connected
+    toggleLink(connected ? "← Back" : "", () => { forceInstall = false; renderSetup(); });
+  } else if (connecting) {
+    $("setup-emoji").textContent = "🔌";
+    $("setup-title").textContent = ctx.local.name || "Your computer";
+    $("setup-sub").textContent = "Agent is running — connecting…";
+    toggleLink("Set up a different computer →", () => { forceInstall = true; renderSetup(); });
+  } else {
+    // CALL view — a computer is connected
+    $("setup-emoji").textContent = "💻";
+    const distro = osLabel(onThis ? ctx.local : dev);
+    if (onThis) {
+      $("setup-title").textContent = "This computer";
+      $("setup-sub").innerHTML = `<span class="ok">✓ connected</span>` +
+        (distro ? ` · ${distro}` : "") + `<br><small>Call it from your phone — or test from here.</small>`;
+      $("call-hint").textContent = "call from here";
+    } else {
+      $("setup-title").textContent = dev?.name || "My Computer";
+      $("setup-sub").innerHTML = `<span class="ok">✓ connected</span>` + (distro ? ` · ${distro}` : "");
+      $("call-hint").textContent = "call";
+    }
+    toggleLink("Set up a different computer →", () => { forceInstall = true; renderSetup(); });
+  }
+}
+
+function toggleLink(text, onclick) {
+  const el = $("setup-toggle");
+  if (!text) { el.style.display = "none"; return; }
+  el.style.display = "";
+  el.textContent = text;
+  el.onclick = (e) => { e.preventDefault(); onclick(); };
+}
+
+// ---------- install panel (OS tabs, download, pairing code, run command) ----------
+function renderInstall() {
+  $("os-tabs").innerHTML = "";
+  for (const [key, os] of Object.entries(OSES)) {
+    const b = document.createElement("button");
+    b.textContent = os.label;
+    b.className = key === currentOS ? "active" : "";
+    b.onclick = () => { currentOS = key; renderInstall(); };
+    $("os-tabs").appendChild(b);
+  }
+  const os = OSES[currentOS];
+  $("dl").href = `${REPO}/releases/latest/download/${os.asset}`;
+  $("dl").textContent = `Download for ${os.label}`;
+  $("dl-note").textContent = "Single file, no installer. No releases yet? Build from source: " +
+    "git clone " + REPO + " && cargo build --release --manifest-path executor/Cargo.toml";
+  $("run-note").textContent = os.note;
+  renderCmd();
+  if (pairCode === "······") getPairCode();   // fetch a code the first time we show install
+}
+
+function renderCmd() {
+  const os = OSES[currentOS];
+  const exe = (currentOS === "windows" ? ".\\" : "./") + os.asset.split("/").pop();
+  $("cmd-text").textContent = os.run(exe).replace("CODE", pairCode);
+}
+
+async function getPairCode() {
+  try {
+    const r = await fetch(API_BASE + "/api/pair/new", { method: "POST", headers: codeHeaders() });
+    if (r.status === 401) { $("code").textContent = "passcode?"; $("ttl").textContent = "—"; return; }
+    const j = await r.json();
+    pairCode = j.code;
+    $("code").textContent = pairCode;
+    renderCmd();
+    startTtl(j.expires_in || 600);
+  } catch (_) { $("code").textContent = "error"; }
+}
+
+let ttlH = null;
+function startTtl(secs) {
+  clearInterval(ttlH);
+  const end = Date.now() + secs * 1000;
+  const tick = () => {
+    const left = Math.max(0, Math.round((end - Date.now()) / 1000));
+    $("ttl").textContent = `${Math.floor(left / 60)}:${String(left % 60).padStart(2, "0")}`;
+    if (left <= 0) { clearInterval(ttlH); getPairCode(); }  // auto-refresh expired code
+  };
+  tick(); ttlH = setInterval(tick, 1000);
+}
+
+document.querySelectorAll(".copy").forEach((b) => b.onclick = () => {
+  navigator.clipboard.writeText($("cmd-text").textContent);
+  b.textContent = "copied"; setTimeout(() => b.textContent = "copy", 1200);
+});
+
+// re-detect while we're on the setup screen, so it flips to "connected" on its own
+let detectTimer = null;
+function startDetectLoop() {
+  detectContext();
+  clearInterval(detectTimer);
+  detectTimer = setInterval(() => {
+    if (screens.setup.classList.contains("active")) detectContext();
+  }, 2500);
+}
+
 // ---------- call timer ----------
 function startTimer() {
   timerStart = Date.now();
@@ -75,9 +272,6 @@ function startTimer() {
 function stopTimer() { clearInterval(timerHandle); timerHandle = null; }
 
 // ---------- ringback tone while calling (subtle: two soft sines, 1.2s on / ~3s off) ----------
-// All tones route through one master gain so stopRingtone() can silence an
-// in-flight ring INSTANTLY on connect (clearing the interval alone left the
-// already-scheduled oscillators ringing for ~1-2 s after the call connected).
 function ringOnce() {
   if (!ringGain) return;
   const c = actx();
@@ -182,8 +376,13 @@ async function probeAuth() {
   if (authRequired) {
     const f = $("passcode");
     f.style.display = "";
-    f.value = getCode();
-    f.addEventListener("input", () => setCode(f.value));
+    f.value = getStoredCode();
+    f.addEventListener("input", () => {
+      setCode(f.value);
+      // a passcode is needed to mint a pairing code — retry once typed
+      clearTimeout(window._pcDeb);
+      window._pcDeb = setTimeout(() => { if ($("setup-install").style.display !== "none") getPairCode(); }, 500);
+    });
   }
 }
 
@@ -282,6 +481,13 @@ function endCall(title, detail) {
   show("ended");
 }
 
+// back to the device-aware landing (re-detects connection state)
+function backToSetup() {
+  teardown();
+  show("setup");
+  startDetectLoop();
+}
+
 // ---------- mic gating: push-to-talk (default) / hands-free ----------
 function applyMicState() {
   const live = pttMode ? pttLive : true;
@@ -319,7 +525,8 @@ $("btn-mode").onclick = () => {
 // ---------- wire up ----------
 $("btn-call").onclick = startCall;
 $("btn-again").onclick = startCall;
-$("btn-cancel").onclick = () => endCall("Call cancelled", "");
-$("btn-hangup").onclick = () => endCall("Call ended", "");
+$("btn-cancel").onclick = backToSetup;
+$("btn-hangup").onclick = backToSetup;
 
-probeAuth();  // reveal the passcode field if the gateway requires one
+probeAuth();        // reveal the passcode field if the gateway requires one
+startDetectLoop();  // device-aware landing

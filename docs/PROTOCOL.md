@@ -18,8 +18,10 @@ screenshot.
 2. The executor connects and sends:
    ```json
    {"type": "pair", "code": "AB3K9Q", "name": "<hostname>", "os": "windows|macos|linux",
-    "screen_w": 2560, "screen_h": 1440}
+    "distro": "Ubuntu 24.04.1 LTS", "screen_w": 2560, "screen_h": 1440}
    ```
+   (`distro` is a human-readable OS string, mainly to show which Linux distro the
+   controlled machine is; `/api/devices` surfaces it to the landing page.)
 3. Server validates the code (single-use, TTL 600 s) and replies:
    `{"type": "paired", "token": "<long-lived device token>"}`
    then treats the connection as online (no separate hello needed).
@@ -31,9 +33,29 @@ The executor persists the token locally and never pairs again.
 
 ```json
 -> {"type": "hello", "token": "...", "name": "<hostname>", "os": "...",
-    "screen_w": 2560, "screen_h": 1440}
+    "distro": "...", "screen_w": 2560, "screen_h": 1440}
 <- {"type": "ready"}                       (or {"type":"error",...} + close)
 ```
+
+## Local presence beacon (executor → loopback HTTP, not the gateway)
+
+So the call web page can tell it is open **on** the controlled computer (this
+binary is running here) rather than on a phone, the executor also runs a tiny
+HTTP server bound to **loopback only**: `127.0.0.1:8724` (override with
+`--local-port` / `CALLPC_LOCAL_PORT`; `0` disables). The page fetches it:
+
+```
+GET http://127.0.0.1:8724/whoami
+-> {"callpc": true, "name": "...", "os": "...", "distro": "...",
+    "screen_w": 1920, "screen_h": 1080, "paired": true, "online": true}
+```
+
+`online` mirrors the live gateway WebSocket; `paired` is whether a device token
+is stored. Every response (and the `OPTIONS` preflight) carries CORS plus
+`Access-Control-Allow-Private-Network: true`, so an HTTPS page may probe it
+(loopback is a "potentially trustworthy" origin, so this is not mixed content).
+This signal only refines the landing UI — it gates nothing — so a browser that
+blocks it simply falls back to `/api/devices`.
 
 ## Requests (server → executor; every request carries an `id`,
 ## every reply echoes it)

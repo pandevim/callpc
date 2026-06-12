@@ -6,7 +6,7 @@ description = "callpc executor — dumb I/O stub for the controlled computer (do
 license = "MIT"
 
 [dependencies]
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "sync"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "sync", "net", "io-util"] }
 tokio-tungstenite = { version = "0.24", features = ["rustls-tls-native-roots"] }
 # ring (not the default aws-lc-rs, which needs cmake/clang to build)
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }

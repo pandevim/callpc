@@ -132,6 +132,7 @@ class ControlHub:
                 self._devices[token] = {
                     "name": first.get("name", "?"),
                     "os": first.get("os", "?"),
+                    "distro": first.get("distro"),
                     "paired_at": time.strftime("%Y-%m-%d %H:%M:%S"),
                 }
                 self._save()
@@ -151,6 +152,7 @@ class ControlHub:
             info = {
                 "name": first.get("name", self._devices[token]["name"]),
                 "os": first.get("os", self._devices[token]["os"]),
+                "distro": first.get("distro", self._devices[token].get("distro")),
                 "screen_w": first.get("screen_w"),
                 "screen_h": first.get("screen_h"),
             }

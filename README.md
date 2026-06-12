@@ -125,8 +125,10 @@ works and never changes between jobs.)
 
 ### 2. Connect the computer you want to control
 
-Open `https://<your-url>/connect.html`, enter the passcode, copy the pairing code,
-and run the executor on that machine:
+Open `https://<your-url>` **on the computer you want to control**. The page is
+device-aware: with nothing connected yet it shows only the download + pairing
+instructions (no call button). Enter the passcode, grab the pairing code, and run
+the executor on that machine:
 
 ```bash
 # prebuilt binary (Releases) — or build: cargo build --release --manifest-path executor/Cargo.toml
@@ -134,7 +136,10 @@ and run the executor on that machine:
 ```
 
 It pairs once, stores a token, and reconnects automatically afterwards. The page
-shows **"Connected!"** when it's online.
+then flips to **"✓ This computer is connected"** on its own — it knows because the
+executor runs a loopback beacon (`127.0.0.1:8724`) the page quietly probes. Open the
+same URL on your phone and you'll instead see **"📞 \<name\> connected — call it"**,
+plus a *"Set up a different computer →"* link if you want to pair another machine.
 
 - **Windows / macOS / Linux-X11:** download-and-run, no fuss (unsigned-binary
   warning on Win/Mac for now).
