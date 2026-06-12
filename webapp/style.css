@@ -94,10 +94,17 @@ body {
 .dark.engaged svg { fill: #15192b; }
 
 .hint { color: #93a0b8; font-size: .85rem; }
-.passcode { margin-top: 18px; padding: 10px 16px; border-radius: 10px; border: 1px solid #344;
-  background: #161c2e; color: #eef1f7; font-size: 1rem; text-align: center; width: 180px;
-  letter-spacing: 3px; }
-.passcode::placeholder { letter-spacing: normal; color: #6b7896; }
+/* OTP-style passcode boxes (6 chars, the device code the executor displays) */
+.passcode-boxes { display: flex; gap: 8px; justify-content: center; margin-top: 18px; }
+.passcode-boxes input {
+  width: 42px; height: 52px; text-align: center;
+  font-size: 1.4rem; font-weight: 700; text-transform: uppercase;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  border: 1px solid #344; border-radius: 10px;
+  background: #161c2e; color: #6ee7a0;
+  outline: none; caret-color: #6ee7a0;
+}
+.passcode-boxes input:focus { border-color: #3a4a7c; background: #1b2440; }
 .connect-link { color: #6b7896; font-size: .85rem; text-decoration: none; margin-top: 22px; }
 .connect-link:hover { color: #93a0b8; }
 
@@ -120,6 +127,9 @@ a.dl { display: inline-block; background: linear-gradient(160deg, #34d97b, #1faf
 .muted { color: #6b7896; font-size: .8rem; margin-top: 6px; line-height: 1.45; }
 .code { font-size: 2rem; font-weight: 800; letter-spacing: 6px; color: #6ee7a0;
   text-align: center; margin: 2px 0 4px; font-family: ui-monospace, monospace; }
+#manual-pair { margin-top: 14px; border-top: 1px solid #232c44; padding-top: 12px; }
+#manual-pair summary { color: #6b7896; font-size: .85rem; cursor: pointer; }
+#manual-pair[open] summary { margin-bottom: 12px; }
 .pair-note { color: #93a0b8; font-size: .82rem; text-align: center; margin-bottom: 12px; }
 pre { font-family: ui-monospace, "SF Mono", Menlo, monospace; background: #0a0e18;
   border: 1px solid #232c44; border-radius: 8px; padding: 12px 14px; overflow-x: auto;

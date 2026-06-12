@@ -30,14 +30,60 @@ const WS_URL = (API_BASE || location.origin).replace(/^http/, "ws") + "/control/
 
 const $ = (id) => document.getElementById(id);
 
-// ---------- passcode (shared access gate; used for both pairing and calling) ----------
+// ---------- passcode (per-device, shown by the executor on the computer) ----------
 const getStoredCode = () => (localStorage.getItem("callpc_code") || "").trim();
 const setCode = (c) => localStorage.setItem("callpc_code", (c || "").trim());
 const codeHeaders = () => {
-  const c = ($("passcode")?.value || getStoredCode()).trim();
+  const c = getStoredCode();
   return c ? { "X-Callpc-Code": c } : {};
 };
 let authRequired = false;
+
+// OTP-style entry: 6 boxes, auto-advance, paste-friendly — and it submits
+// ONLY once all 6 are filled (the old free-text field retried on every
+// keystroke, bouncing partial codes off the server).
+const PC_LEN = 6;
+const pcBoxes = () => [...document.querySelectorAll("#passcode input")];
+const pcValue = () => pcBoxes().map((b) => b.value).join("");
+function pcShow(focus) {
+  $("passcode").style.display = "";
+  if (focus) pcBoxes()[0].focus();
+}
+function pcClear() { pcBoxes().forEach((b) => { b.value = ""; }); }
+function pcFill(code) {
+  const c = (code || "").trim().toUpperCase();
+  pcBoxes().forEach((b, i) => { b.value = c[i] || ""; });
+}
+function pcComplete() {
+  if (pcValue().length < PC_LEN) return;   // wait for the whole code
+  setCode(pcValue());
+  chatAuthFailed = false;                  // let the chat retry with it
+  detectContext();                         // now — not on the next 2.5 s tick
+}
+(() => {
+  const boxes = pcBoxes();
+  boxes.forEach((b, i) => {
+    b.addEventListener("input", () => {
+      b.value = b.value.toUpperCase().slice(-1);
+      if (b.value && i < PC_LEN - 1) boxes[i + 1].focus();
+      pcComplete();
+    });
+    b.addEventListener("keydown", (e) => {
+      if (e.key === "Backspace" && !b.value && i > 0) {
+        boxes[i - 1].value = "";
+        boxes[i - 1].focus();
+        e.preventDefault();
+      }
+    });
+    b.addEventListener("paste", (e) => {
+      e.preventDefault();
+      pcFill(e.clipboardData.getData("text") || "");
+      const v = pcValue();
+      (boxes[Math.min(v.length, PC_LEN - 1)] || boxes[0]).focus();
+      pcComplete();
+    });
+  });
+})();
 
 const screens = {
   setup: $("screen-setup"),
@@ -80,13 +126,16 @@ function setRingStatus(msg) { $("ring-status").textContent = msg; }
 // ====================================================================
 const OSES = {
   windows: { label: "Windows", asset: "callpc-executor-windows-x64.exe",
-    run: (exe) => `${exe} --url ${WS_URL} --code CODE`,
-    note: "Double-click won't pass the code — run it from PowerShell. SmartScreen may warn (unsigned): More info → Run anyway." },
+    plain: (exe) => `${exe}`,
+    manual: (exe) => `${exe} --url ${WS_URL} --code CODE`,
+    note: "Double-click works too. SmartScreen may warn (unsigned): More info → Run anyway." },
   macos: { label: "macOS", asset: "callpc-executor-macos-universal",
-    run: (exe) => `chmod +x ${exe} && ${exe} --url ${WS_URL} --code CODE`,
+    plain: (exe) => `chmod +x ${exe} && ${exe}`,
+    manual: (exe) => `chmod +x ${exe} && ${exe} --url ${WS_URL} --code CODE`,
     note: "First run: right-click the file → Open (unsigned). Approve Screen Recording + Accessibility when asked." },
   linux: { label: "Linux", asset: "callpc-executor-linux-x64",
-    run: (exe) => `chmod +x ${exe} && ./${exe} --url ${WS_URL} --code CODE`,
+    plain: (exe) => `chmod +x ${exe} && ${exe}`,
+    manual: (exe) => `chmod +x ${exe} && ${exe} --url ${WS_URL} --code CODE`,
     note: "Wayland (GNOME/KDE): approve the screen-share prompt. Input needs the 'input' group / uinput access." },
 };
 
@@ -148,7 +197,7 @@ async function maybeAutoConfigure() {
     const r = await fetch(API_BASE + "/api/pair/new", { method: "POST", headers: codeHeaders() });
     if (r.status === 401) {                 // master-key-only server (legacy)
       $("setup-sub").textContent = "Enter the passcode above to finish setup.";
-      $("passcode").style.display = "";
+      pcShow(false);
       return;                               // retry on the next tick once it's typed
     }
     const j = await r.json();
@@ -232,14 +281,19 @@ function renderInstall() {
     "git clone " + REPO + " && cargo build --release --manifest-path executor/Cargo.toml";
   $("run-note").textContent = os.note;
   renderCmd();
-  if (pairCode === "······") getPairCode();   // fetch a code the first time we show install
 }
 
 function renderCmd() {
   const os = OSES[currentOS];
   const exe = (currentOS === "windows" ? ".\\" : "./") + os.asset.split("/").pop();
-  $("cmd-text").textContent = os.run(exe).replace("CODE", pairCode);
+  $("cmd-text").textContent = os.plain(exe);   // the normal path: auto-pairs, no code
+  $("cmd2-text").textContent = os.manual(exe).replace("CODE", pairCode);
 }
+
+// pairing codes are only minted when someone actually opens the manual path
+$("manual-pair").addEventListener("toggle", () => {
+  if ($("manual-pair").open && pairCode === "······") getPairCode();
+});
 
 async function getPairCode() {
   try {
@@ -266,7 +320,7 @@ function startTtl(secs) {
 }
 
 document.querySelectorAll(".copy").forEach((b) => b.onclick = () => {
-  navigator.clipboard.writeText($("cmd-text").textContent);
+  navigator.clipboard.writeText($(b.dataset.copy + "-text").textContent);
   b.textContent = "copied"; setTimeout(() => b.textContent = "copy", 1200);
 });
 
@@ -396,18 +450,9 @@ async function probeAuth() {
     const cfg = await (await fetch(API_BASE + "/api/config")).json();
     authRequired = !!cfg.auth_required;
   } catch (_) { authRequired = false; }
-  if (authRequired) {
-    const f = $("passcode");
-    f.style.display = "";
-    f.value = getStoredCode();
-    f.addEventListener("input", () => {
-      setCode(f.value);
-      chatAuthFailed = false;  // let the detect loop retry the chat with the new code
-      // a passcode is needed to mint a pairing code — retry once typed
-      clearTimeout(window._pcDeb);
-      window._pcDeb = setTimeout(() => { if ($("setup-install").style.display !== "none") getPairCode(); }, 500);
-    });
-  }
+  // a stored code is tried silently; the boxes appear only when one is
+  // missing (here) or rejected (needPasscode on a 4401)
+  if (authRequired && !getStoredCode()) pcShow(false);
 }
 
 // ---------- call lifecycle ----------
@@ -468,7 +513,6 @@ async function startCall() {
     });
 
     setRingStatus("ringing…");
-    if (authRequired) setCode($("passcode").value);
     const r = await fetch(API_BASE + "/api/offer", {
       method: "POST",
       headers: { "Content-Type": "application/json", ...codeHeaders() },
@@ -598,9 +642,8 @@ function needPasscode() {
   $("setup-title").textContent = "Passcode needed";
   $("setup-sub").textContent = "The callpc agent shows it on the computer "
     + "you're connecting to (in its terminal, a PASSCODE box).";
-  const f = $("passcode");
-  f.style.display = "";
-  f.focus();
+  pcClear();    // the stored code was just rejected — start fresh
+  pcShow(true);
 }
 
 function handleChat(m) {

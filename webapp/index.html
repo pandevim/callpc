@@ -18,8 +18,15 @@
         <div class="avatar" id="setup-avatar"><span id="setup-emoji">💻</span></div>
         <h1 id="setup-title">My Computer</h1>
         <p class="sub" id="setup-sub">checking connection…</p>
-        <input id="passcode" class="passcode" type="password" inputmode="numeric"
-               placeholder="passcode" autocomplete="off" style="display:none">
+        <!-- 6-char device passcode, OTP-style: submits only when complete -->
+        <div id="passcode" class="passcode-boxes" style="display:none">
+          <input maxlength="1" autocapitalize="characters" autocomplete="off" spellcheck="false">
+          <input maxlength="1" autocapitalize="characters" autocomplete="off" spellcheck="false">
+          <input maxlength="1" autocapitalize="characters" autocomplete="off" spellcheck="false">
+          <input maxlength="1" autocapitalize="characters" autocomplete="off" spellcheck="false">
+          <input maxlength="1" autocapitalize="characters" autocomplete="off" spellcheck="false">
+          <input maxlength="1" autocapitalize="characters" autocomplete="off" spellcheck="false">
+        </div>
       </div>
 
       <!-- INSTALL panel — shown when no computer is connected (or "set up a different computer") -->
@@ -32,11 +39,17 @@
           <div class="muted" id="dl-note"></div>
         </div>
         <div class="card">
-          <h2>2 · Run it with this pairing code</h2>
-          <div class="code" id="code">······</div>
-          <p class="pair-note">expires in <span id="ttl">10:00</span> · pairs this computer once, then remembers it</p>
+          <h2>2 · Run it</h2>
           <pre id="cmd"><button class="copy" data-copy="cmd">copy</button><span id="cmd-text">loading…</span></pre>
           <div class="muted" id="run-note"></div>
+          <p class="muted">Keep this page open on that computer — it pairs itself,
+            then shows you its passcode. No code to type here.</p>
+          <details id="manual-pair">
+            <summary>Pairing from another machine, or headless?</summary>
+            <div class="code" id="code">······</div>
+            <p class="pair-note">expires in <span id="ttl">10:00</span> · single use</p>
+            <pre id="cmd2"><button class="copy" data-copy="cmd2">copy</button><span id="cmd2-text">loading…</span></pre>
+          </details>
         </div>
       </div>
 
