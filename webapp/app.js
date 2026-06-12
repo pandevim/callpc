@@ -36,6 +36,7 @@ let timerHandle = null;
 let talkingHandle = null;
 let micVizHandle = null;
 let ringHandle = null;
+let ringGain = null;    // master gain for ringback; zeroed to stop instantly
 let audioCtx = null;    // one shared AudioContext (created on the call gesture)
 
 function actx() {
@@ -64,11 +65,15 @@ function startTimer() {
 function stopTimer() { clearInterval(timerHandle); timerHandle = null; }
 
 // ---------- ringback tone while calling (subtle: two soft sines, 1.2s on / ~3s off) ----------
+// All tones route through one master gain so stopRingtone() can silence an
+// in-flight ring INSTANTLY on connect (clearing the interval alone left the
+// already-scheduled oscillators ringing for ~1-2 s after the call connected).
 function ringOnce() {
+  if (!ringGain) return;
   const c = actx();
   const t = c.currentTime;
   const g = c.createGain();
-  g.connect(c.destination);
+  g.connect(ringGain);
   g.gain.setValueAtTime(0, t);
   g.gain.linearRampToValueAtTime(0.05, t + 0.08);   // quiet — barely-there ringback
   g.gain.setValueAtTime(0.05, t + 1.0);
@@ -84,11 +89,26 @@ function ringOnce() {
 }
 function startRingtone() {
   stopRingtone();
-  try { ringOnce(); ringHandle = setInterval(ringOnce, 4200); } catch (_) {}
+  try {
+    const c = actx();
+    ringGain = c.createGain();
+    ringGain.connect(c.destination);
+    ringOnce();
+    ringHandle = setInterval(ringOnce, 4200);
+  } catch (_) {}
 }
 function stopRingtone() {
   clearInterval(ringHandle);
   ringHandle = null;
+  if (ringGain) {
+    try {
+      const now = actx().currentTime;
+      ringGain.gain.cancelScheduledValues(now);
+      ringGain.gain.setValueAtTime(0, now);  // kill any in-flight tone immediately
+      ringGain.disconnect();
+    } catch (_) {}
+    ringGain = null;
+  }
 }
 
 // ---------- "bot is talking" avatar glow (driven by remote audio level) ----------
