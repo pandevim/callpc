@@ -53,8 +53,8 @@ let sendStream = null;  // mic -> gain -> destination; what we actually send
 let micGain = null;     // mic gating = gain 0/1 (NOT track.enabled=false: that
                         // thins the RTP flow and the server's idle watcher kills
                         // the receiver — unmute after ~10 s went silent until redial)
-let pttMode = true;     // default: push-to-talk; toggleable to hands-free
-let pttLive = false;    // true while the PTT button is held
+let handsFree = false;  // mic locked open (quick tap on the pill toggles it)
+let pttLive = false;    // true while the pill is held (push-to-talk)
 let timerStart = 0;
 let timerHandle = null;
 let talkingHandle = null;
@@ -147,7 +147,8 @@ async function maybeAutoConfigure() {
   try {
     const r = await fetch(API_BASE + "/api/pair/new", { method: "POST", headers: codeHeaders() });
     if (r.status === 401) {                 // need a passcode first
-      $("setup-sub").textContent = "Enter the passcode above to finish setup.";
+      $("setup-sub").textContent = "Enter the passcode above to finish setup — "
+        + "it's the PASSCODE line printed in the server's startup log.";
       $("passcode").style.display = "";
       return;                               // retry on the next tick once it's typed
     }
@@ -512,39 +513,38 @@ function backToSetup() {
   startDetectLoop();
 }
 
-// ---------- mic gating: push-to-talk (default) / hands-free ----------
+// ---------- mic gating: ONE pill — hold to talk, quick tap locks hands-free ----------
 function applyMicState() {
-  const live = pttMode ? pttLive : true;
+  const live = handsFree || pttLive;
   if (micGain) {
     // quick fade avoids a click; the stream keeps flowing (silence) so the
     // server-side receiver never idles out
     micGain.gain.setTargetAtTime(live ? 1 : 0, actx().currentTime, 0.02);
   }
-  $("btn-ptt").classList.toggle("hidden", !pttMode);
-  $("btn-ptt").classList.toggle("live", pttMode && pttLive);
-  $("ic-mic").style.display = pttMode ? "none" : "";       // hands-free: open mic icon
-  $("ic-mic-off").style.display = pttMode ? "" : "none";   // PTT: mic gated icon
-  $("mode-hint").textContent = pttMode ? "hands-free" : "push to talk";
-  $("btn-mode").classList.toggle("engaged", !pttMode);
+  const b = $("btn-ptt");
+  b.classList.toggle("live", live);
+  b.textContent = handsFree ? "🎙 mic open — tap to mute"
+                : pttLive   ? "talking…"
+                            : "hold to talk · tap for hands-free";
 }
 
 const _ptt = $("btn-ptt");
+let pttDownAt = 0;
 _ptt.addEventListener("pointerdown", (e) => {
   e.preventDefault();
   try { _ptt.setPointerCapture(e.pointerId); } catch (_) {}
-  pttLive = true;
-  applyMicState();
+  pttDownAt = Date.now();
+  if (!handsFree) { pttLive = true; applyMicState(); }
 });
 for (const ev of ["pointerup", "pointercancel"]) {
-  _ptt.addEventListener(ev, () => { pttLive = false; applyMicState(); });
+  _ptt.addEventListener(ev, () => {
+    const tap = Date.now() - pttDownAt < 250;   // quick tap = toggle hands-free
+    pttLive = false;
+    if (tap) handsFree = !handsFree;
+    applyMicState();
+  });
 }
 _ptt.addEventListener("contextmenu", (e) => e.preventDefault());  // mobile long-press
-
-$("btn-mode").onclick = () => {
-  pttMode = !pttMode;
-  pttLive = false;
-  applyMicState();
-};
 
 // ====================================================================
 //  Chat — WhatsApp-style messaging with the computer (/api/chat/ws)
@@ -598,7 +598,8 @@ function needPasscode() {
   $("setup-install").style.display = "none";
   $("setup-emoji").textContent = "🔒";
   $("setup-title").textContent = "Passcode needed";
-  $("setup-sub").textContent = "Enter the passcode to open the chat.";
+  $("setup-sub").textContent = "It's printed when the server starts, next to "
+    + "this page's URL (the PASSCODE line in the job log).";
   const f = $("passcode");
   f.style.display = "";
   f.focus();
@@ -757,23 +758,37 @@ function updateComposer() {
   $("btn-rec").style.display = has ? "none" : "";
 }
 
-// ---------- voice notes (hold the mic, release to send) ----------
-let rec = null, recChunks = [], recWanted = false, recStartTs = 0,
-    recTick = null, recStream = null;
+// ---------- voice notes (tap to record, tap ➤ to send, ✕ cancels) ----------
+let rec = null, recChunks = [], recStartTs = 0, recTick = null,
+    recStream = null, recCancelled = false, recStarting = false;
+
+// instant feedback the moment the mic is tapped — BEFORE the permission
+// prompt resolves (the old hold-gesture showed nothing until then)
+function setRecUI(on) {
+  $("btn-rec").classList.toggle("rec", on);
+  $("ic-rec-mic").style.display = on ? "none" : "";
+  $("ic-rec-send").style.display = on ? "" : "none";
+  $("rec-bar").style.display = on ? "" : "none";
+  if (!on) $("rec-time").textContent = "0:00";
+}
 
 async function startRec() {
-  if (rec) return;
-  recWanted = true;
+  if (rec || recStarting) return;
+  recStarting = true;
+  recCancelled = false;
+  setRecUI(true);
   try {
     recStream = await navigator.mediaDevices.getUserMedia({ audio: true });
   } catch (_) {
-    recWanted = false;
+    recStarting = false;
+    setRecUI(false);
     addInfo("⚠️ microphone blocked — allow mic access to send voice notes");
     return;
   }
-  if (!recWanted) {  // finger lifted during the permission prompt
+  if (recCancelled) {  // ✕ tapped while the permission prompt was up
     recStream.getTracks().forEach((t) => t.stop());
     recStream = null;
+    recStarting = false;
     return;
   }
   const mime = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4"]
@@ -783,23 +798,25 @@ async function startRec() {
   rec.ondataavailable = (ev) => { if (ev.data.size) recChunks.push(ev.data); };
   rec.onstop = finishRec;
   rec.start();
+  recStarting = false;
   recStartTs = Date.now();
-  $("btn-rec").classList.add("rec");
-  $("rec-bar").style.display = "";
   recTick = setInterval(() => {
     const s = Math.floor((Date.now() - recStartTs) / 1000);
     $("rec-time").textContent = Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0");
-    if (s >= 60) stopRec();                        // cap notes at a minute
+    if (s >= 60) stopRec(false);                   // cap notes at a minute
   }, 250);
 }
 
-function stopRec() {
-  recWanted = false;
+function stopRec(cancel) {
+  if (recStarting && !rec) {   // still waiting on the permission prompt
+    recCancelled = true;       // nothing recorded yet either way — discard
+    setRecUI(false);
+    return;
+  }
   if (!rec) return;
+  recCancelled = !!cancel;
   clearInterval(recTick);
-  $("btn-rec").classList.remove("rec");
-  $("rec-bar").style.display = "none";
-  $("rec-time").textContent = "0:00";
+  setRecUI(false);
   try { rec.stop(); } catch (_) {}                 // -> finishRec
 }
 
@@ -809,7 +826,8 @@ function finishRec() {
   if (recStream) recStream.getTracks().forEach((t) => t.stop());
   rec = null;
   recStream = null;
-  if (dur < 400 || blob.size < 1000) { addInfo("hold the mic to record a voice note"); return; }
+  if (recCancelled) return;
+  if (dur < 400 || blob.size < 1000) { addInfo("that recording was too short"); return; }
   if (!chatReady()) return;
   const d = bub("user voice");                     // local bubble with playback
   const au = document.createElement("audio");
@@ -829,14 +847,8 @@ function finishRec() {
   r.readAsDataURL(blob);
 }
 
-const _rec = $("btn-rec");
-_rec.addEventListener("pointerdown", (e) => {
-  e.preventDefault();
-  try { _rec.setPointerCapture(e.pointerId); } catch (_) {}
-  startRec();
-});
-for (const ev of ["pointerup", "pointercancel"]) _rec.addEventListener(ev, stopRec);
-_rec.addEventListener("contextmenu", (e) => e.preventDefault());
+$("btn-rec").onclick = () => ((rec || recStarting) ? stopRec(false) : startRec());
+$("rec-cancel").onclick = () => stopRec(true);
 
 // ---------- wire up ----------
 $("btn-chat-call").onclick = startCall;            // the call lives top-right now

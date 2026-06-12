@@ -144,7 +144,6 @@ pre { font-family: ui-monospace, "SF Mono", Menlo, monospace; background: #0a0e1
   background: linear-gradient(160deg, #34d97b, #1faf5b);
   transform: scale(1.05);
 }
-.ptt.hidden { visibility: hidden; }  /* hands-free: keep the layout, hide the pill */
 
 /* ---------- caller mic level (you talking / stopped) ---------- */
 .mic-viz {
@@ -258,13 +257,10 @@ pre { font-family: ui-monospace, "SF Mono", Menlo, monospace; background: #0a0e1
 .comp-btn svg { width: 22px; height: 22px; fill: #93a0b8; }
 .comp-btn.send { background: linear-gradient(160deg, #34d97b, #1faf5b); }
 .comp-btn.send svg { fill: #fff; }
-.comp-btn.mic.rec { background: linear-gradient(160deg, #f4655a, #d83a30);
-  animation: recpulse 1.2s infinite; }
+/* while recording the mic button becomes the green SEND (➤); the red state
+   lives in the bar (pulsing dot + timer) like WhatsApp */
+.comp-btn.mic.rec { background: linear-gradient(160deg, #34d97b, #1faf5b); }
 .comp-btn.mic.rec svg { fill: #fff; }
-@keyframes recpulse {
-  0%, 100% { box-shadow: 0 0 0 0 rgba(244, 101, 90, .5); }
-  50%      { box-shadow: 0 0 0 10px rgba(244, 101, 90, 0); }
-}
 
 /* recording overlay: covers the input while holding the mic */
 .rec-bar {
@@ -277,6 +273,8 @@ pre { font-family: ui-monospace, "SF Mono", Menlo, monospace; background: #0a0e1
   animation: blink 1s infinite; }
 #rec-time { font-variant-numeric: tabular-nums; color: #eef1f7; font-size: .9rem; }
 .rec-hint { color: #6b7896; font-size: .8rem; margin-left: auto; }
+.rec-cancel { border: none; background: none; color: #f4655a; font-size: 1.05rem;
+  cursor: pointer; padding: 4px 8px; flex: none; }
 
 /* tap a screenshot -> full screen */
 .lightbox {

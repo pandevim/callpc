@@ -13,6 +13,7 @@ already staged it).
 """
 import json
 import os
+import secrets
 import sys
 
 from aiortc import RTCIceServer
@@ -54,6 +55,46 @@ from tts_kyutai import KyutaiTTSService
 
 # control hub + task runner (Phase 2) live in server/control + server/tasks
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+
+# --- shared passcode (resolved BEFORE importing chat, which reads the env) ---
+# Anyone with the public URL could otherwise place a call or control a paired
+# computer. Priority: ACCESS_CODE env ("none" disables it — dev only) > a code
+# auto-generated on first start and persisted in server/.state/access_code so
+# it survives restarts. The resolved code is PRINTED in the startup banner
+# right next to the URL — that's where the operator learns it (think: the
+# Wi-Fi password on the router sticker). It is deliberately NOT exposed via
+# any endpoint or the executor's loopback beacon (a local webpage could read
+# that). The executor's own WS auth (pairing code -> token) is independent.
+def _resolve_access_code() -> tuple[str, str]:
+    env = os.environ.get("ACCESS_CODE", "").strip()
+    if env.lower() in ("none", "off", "open"):
+        return "", "disabled via ACCESS_CODE=" + env
+    if env:
+        return env, "from the ACCESS_CODE env"
+    path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                        ".state", "access_code")
+    try:
+        with open(path) as f:
+            code = f.read().strip()
+        if code:
+            return code, "auto-generated earlier, stored in .state/access_code"
+    except OSError:
+        pass
+    code = "".join(secrets.choice("ABCDEFGHJKLMNPQRSTUVWXYZ23456789") for _ in range(6))
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w") as f:
+        f.write(code)
+    try:
+        os.chmod(path, 0o600)
+    except OSError:
+        pass
+    return code, "auto-generated, stored in .state/access_code"
+
+
+ACCESS_CODE, _CODE_SOURCE = _resolve_access_code()
+os.environ["ACCESS_CODE"] = ACCESS_CODE  # chat.py reads it at import
+
 from control.hub import router as control_router  # noqa: E402
 from tasks.runner import router as tasks_router   # noqa: E402
 import tasks.runner as task_runner                 # noqa: E402  (NARRATE hook)
@@ -69,14 +110,6 @@ STT_LANG = os.environ.get("STT_LANG", "en-US")
 # to run text-only (Phase-1b behavior — bot replies appear in the log only).
 TTS_WS_URL = os.environ.get("TTS_WS_URL", "ws://127.0.0.1:8089")
 TTS_ENABLED = TTS_WS_URL.lower() not in ("", "off", "0", "none")
-
-# Shared passcode: anyone with the public URL can otherwise place a call or
-# control a paired computer. Set ACCESS_CODE in the job env to require it on
-# every state-changing endpoint (the call page / connect page / debug page send
-# it as the X-Callpc-Code header). Unset = open (dev only) with a startup warn.
-# The executor's own WS auth (pairing code -> device token) is independent.
-ACCESS_CODE = os.environ.get("ACCESS_CODE", "").strip()
-
 
 def _is_protected(method: str, path: str) -> bool:
     """Action endpoints that require the passcode (pure reads stay open so the
@@ -404,9 +437,10 @@ if __name__ == "__main__":
 
     tts_info = TTS_WS_URL if TTS_ENABLED else "DISABLED (text-only)"
     if ACCESS_CODE:
-        print(f"[gateway] access passcode REQUIRED ({len(ACCESS_CODE)} chars)", flush=True)
+        print(f"[gateway] ACCESS PASSCODE: {ACCESS_CODE}  ({_CODE_SOURCE}) — "
+              "enter this on the page when asked", flush=True)
     else:
-        print("[gateway] WARNING: ACCESS_CODE unset — anyone with the URL can call "
-              "and control a paired computer. Set ACCESS_CODE to lock it down.", flush=True)
+        print("[gateway] WARNING: passcode disabled — anyone with the URL can call "
+              "and control a paired computer.", flush=True)
     print(f"[gateway] starting on {HOST}:{PORT} (STT lang={STT_LANG}, TTS {tts_info})", flush=True)
     uvicorn.run(app, host=HOST, port=PORT)

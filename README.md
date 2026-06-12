@@ -109,6 +109,9 @@ sbatch deploy/prefetch_weights.sbatch    # UI-TARS, Qwen, Kyutai TTS + voices
 
 # put your session env in one file
 cat > ~/.callpc.env <<'ENV'
+# optional — leave ACCESS_CODE out and the server generates a passcode on
+# first start, prints it in the startup banner next to the URL, and keeps it
+# stable across restarts (server/.state/access_code). ACCESS_CODE=none disables.
 export ACCESS_CODE=<choose-a-passcode>
 export NGROK_AUTHTOKEN=<your-token>
 export NGROK_DOMAIN=<your>.ngrok-free.dev      # bare hostname
