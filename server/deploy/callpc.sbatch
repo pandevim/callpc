@@ -301,14 +301,13 @@ echo
 if [ -n "$NGROK_URL" ]; then
     echo "PHONE / ANY DEVICE:  $NGROK_URL"
 fi
-# Passcode next to the URL — the one place the operator learns it. Env wins;
-# otherwise the gateway auto-generated one into .state/access_code (it ran
-# already: the health gate above passed).
-PASSCODE="${ACCESS_CODE:-$(cat "$SERVER_DIR/.state/access_code" 2>/dev/null || true)}"
-case "$(echo "${ACCESS_CODE:-}" | tr '[:upper:]' '[:lower:]')" in
-    none|off|open) PASSCODE="(disabled)";;
-esac
-[ -n "$PASSCODE" ] && echo "PASSCODE          :  $PASSCODE   (the page asks for it once per device)"
+# Passcodes are per-device: each executor displays its own on the computer
+# it controls (TeamViewer model). ACCESS_CODE here is the operator master key.
+if [ -n "${ACCESS_CODE:-}" ]; then
+    echo "PASSCODE          :  per-device (shown by the executor) — master key: \$ACCESS_CODE"
+else
+    echo "PASSCODE          :  shown by the executor running on the controlled computer"
+fi
 if [ "$SSH_TUNNEL_UP" = 1 ]; then
     echo "LAPTOP (same command every job — target is the login node, not $NODE):"
     echo "  ssh -f -N -L $GATEWAY_PORT:localhost:$GATEWAY_PORT \$USER@$LOGIN_HOST"

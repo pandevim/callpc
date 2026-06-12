@@ -13,7 +13,6 @@ already staged it).
 """
 import json
 import os
-import secrets
 import sys
 
 from aiortc import RTCIceServer
@@ -57,45 +56,11 @@ from tts_kyutai import KyutaiTTSService
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
-# --- shared passcode (resolved BEFORE importing chat, which reads the env) ---
-# Anyone with the public URL could otherwise place a call or control a paired
-# computer. Priority: ACCESS_CODE env ("none" disables it — dev only) > a code
-# auto-generated on first start and persisted in server/.state/access_code so
-# it survives restarts. The resolved code is PRINTED in the startup banner
-# right next to the URL — that's where the operator learns it (think: the
-# Wi-Fi password on the router sticker). It is deliberately NOT exposed via
-# any endpoint or the executor's loopback beacon (a local webpage could read
-# that). The executor's own WS auth (pairing code -> token) is independent.
-def _resolve_access_code() -> tuple[str, str]:
-    env = os.environ.get("ACCESS_CODE", "").strip()
-    if env.lower() in ("none", "off", "open"):
-        return "", "disabled via ACCESS_CODE=" + env
-    if env:
-        return env, "from the ACCESS_CODE env"
-    path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                        ".state", "access_code")
-    try:
-        with open(path) as f:
-            code = f.read().strip()
-        if code:
-            return code, "auto-generated earlier, stored in .state/access_code"
-    except OSError:
-        pass
-    code = "".join(secrets.choice("ABCDEFGHJKLMNPQRSTUVWXYZ23456789") for _ in range(6))
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, "w") as f:
-        f.write(code)
-    try:
-        os.chmod(path, 0o600)
-    except OSError:
-        pass
-    return code, "auto-generated, stored in .state/access_code"
-
-
-ACCESS_CODE, _CODE_SOURCE = _resolve_access_code()
-os.environ["ACCESS_CODE"] = ACCESS_CODE  # chat.py reads it at import
-
-from control.hub import router as control_router  # noqa: E402
+# Passcodes are PER-DEVICE (TeamViewer model): generated when a computer
+# pairs and DISPLAYED BY THE EXECUTOR on that computer — seeing that screen
+# is what proves you may control it. The optional ACCESS_CODE env is an
+# operator master key. All checks live in control.hub (MASTER_CODE/code_ok).
+from control.hub import hub, router as control_router  # noqa: E402
 from tasks.runner import router as tasks_router   # noqa: E402
 import tasks.runner as task_runner                 # noqa: E402  (NARRATE hook)
 import brain                                       # noqa: E402  (persona + tools, Phase 3)
@@ -112,13 +77,13 @@ TTS_WS_URL = os.environ.get("TTS_WS_URL", "ws://127.0.0.1:8089")
 TTS_ENABLED = TTS_WS_URL.lower() not in ("", "off", "0", "none")
 
 def _is_protected(method: str, path: str) -> bool:
-    """Action endpoints that require the passcode (pure reads stay open so the
-    page can bootstrap ICE/status before the user types the code)."""
+    """Action endpoints that require a passcode (pure reads stay open so the
+    page can bootstrap ICE/status before the user types the code). Pairing is
+    deliberately OPEN: running the binary offers YOUR OWN computer — the
+    per-device passcode it then displays is what gates controlling it."""
     if path.startswith("/api/control/"):
         return True
     if path == "/api/offer" and method == "POST":
-        return True
-    if path == "/api/pair/new" and method == "POST":
         return True
     if path == "/api/calibrate" and method == "POST":
         return True
@@ -172,9 +137,10 @@ app.include_router(chat.router)     # /api/chat/ws (passcode checked in-handler 
 
 @app.middleware("http")
 async def access_gate(request: Request, call_next):
-    """Reject state-changing requests without the right passcode (when set)."""
-    if ACCESS_CODE and _is_protected(request.method, request.url.path):
-        if request.headers.get("x-callpc-code", "") != ACCESS_CODE:
+    """Reject state-changing requests without a valid passcode (the target
+    device's own code, or the operator's ACCESS_CODE master key)."""
+    if _is_protected(request.method, request.url.path):
+        if not hub.code_ok(request.headers.get("x-callpc-code", "")):
             return JSONResponse({"error": "passcode required or incorrect"}, status_code=401)
     return await call_next(request)
 _connections: dict[str, SmallWebRTCConnection] = {}  # pc_id -> connection
@@ -330,7 +296,7 @@ async def health():
 async def api_config():
     """Client bootstrap: ICE servers (incl. TURN creds when configured) +
     whether a passcode is required (so the page knows to prompt)."""
-    return {"ice_servers": ICE_CONFIG, "auth_required": bool(ACCESS_CODE)}
+    return {"ice_servers": ICE_CONFIG, "auth_required": hub.auth_required()}
 
 
 @app.post("/api/offer")
@@ -436,11 +402,12 @@ if __name__ == "__main__":
     stt_nemotron._get_engine(STT_LANG, None)
 
     tts_info = TTS_WS_URL if TTS_ENABLED else "DISABLED (text-only)"
-    if ACCESS_CODE:
-        print(f"[gateway] ACCESS PASSCODE: {ACCESS_CODE}  ({_CODE_SOURCE}) — "
-              "enter this on the page when asked", flush=True)
+    from control.hub import MASTER_CODE
+    if MASTER_CODE:
+        print(f"[gateway] passcodes: per-device (shown by each executor) + "
+              f"operator master key from ACCESS_CODE", flush=True)
     else:
-        print("[gateway] WARNING: passcode disabled — anyone with the URL can call "
-              "and control a paired computer.", flush=True)
+        print("[gateway] passcodes: per-device — each executor displays its own "
+              "on the controlled computer", flush=True)
     print(f"[gateway] starting on {HOST}:{PORT} (STT lang={STT_LANG}, TTS {tts_info})", flush=True)
     uvicorn.run(app, host=HOST, port=PORT)

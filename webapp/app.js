@@ -146,9 +146,8 @@ async function maybeAutoConfigure() {
   if (autoTried) return;                                          // already sent this round
   try {
     const r = await fetch(API_BASE + "/api/pair/new", { method: "POST", headers: codeHeaders() });
-    if (r.status === 401) {                 // need a passcode first
-      $("setup-sub").textContent = "Enter the passcode above to finish setup — "
-        + "it's the PASSCODE line printed in the server's startup log.";
+    if (r.status === 401) {                 // master-key-only server (legacy)
+      $("setup-sub").textContent = "Enter the passcode above to finish setup.";
       $("passcode").style.display = "";
       return;                               // retry on the next tick once it's typed
     }
@@ -598,8 +597,8 @@ function needPasscode() {
   $("setup-install").style.display = "none";
   $("setup-emoji").textContent = "🔒";
   $("setup-title").textContent = "Passcode needed";
-  $("setup-sub").textContent = "It's printed when the server starts, next to "
-    + "this page's URL (the PASSCODE line in the job log).";
+  $("setup-sub").textContent = "The callpc agent shows it on the computer "
+    + "you're connecting to (in its terminal, a PASSCODE box).";
   const f = $("passcode");
   f.style.display = "";
   f.focus();

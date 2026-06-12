@@ -29,6 +29,17 @@ DEVICES_PATH = os.path.join(STATE_DIR, "devices.json")
 PAIR_TTL_S = 600
 REQUEST_TIMEOUT_S = 20.0
 
+# unambiguous alphabet (no 0/O/1/I) — pairing codes AND device passcodes
+ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+
+# Optional operator master key. The normal path is the PER-DEVICE passcode:
+# generated when a device pairs, sent to the executor, and SHOWN BY THE
+# EXECUTOR on the controlled computer (TeamViewer-style — seeing that screen
+# is what proves you may control it). ACCESS_CODE=none/off/open disables.
+MASTER_CODE = os.environ.get("ACCESS_CODE", "").strip()
+if MASTER_CODE.lower() in ("none", "off", "open"):
+    MASTER_CODE = ""
+
 
 class ControlHub:
     def __init__(self):
@@ -57,11 +68,26 @@ class ControlHub:
     # ---------------- pairing ----------------
 
     def new_pair_code(self) -> str:
-        # unambiguous alphabet (no 0/O/1/I)
-        alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
-        code = "".join(secrets.choice(alphabet) for _ in range(6))
+        code = "".join(secrets.choice(ALPHABET) for _ in range(6))
         self._pair_codes[code] = time.monotonic() + PAIR_TTL_S
         return code
+
+    # ---------------- access control ----------------
+
+    def auth_required(self) -> bool:
+        return bool(MASTER_CODE) or bool(self._devices)
+
+    def code_ok(self, code: str) -> bool:
+        """May this passcode drive/call/chat? Master key, or any paired
+        device's own passcode (single-tenant: there's effectively one).
+        Nothing paired and no master -> open (nothing to protect yet)."""
+        if not self.auth_required():
+            return True
+        code = (code or "").strip()
+        if MASTER_CODE and code == MASTER_CODE:
+            return True
+        cu = code.upper()
+        return any(d.get("access_code") == cu for d in self._devices.values())
 
     def _redeem_pair_code(self, code: str) -> bool:
         expiry = self._pair_codes.pop((code or "").strip().upper(), None)
@@ -73,7 +99,9 @@ class ControlHub:
         return [o["info"] for o in self._online.values()]
 
     def paired(self) -> list[dict]:
-        return [{k: v for k, v in d.items() if k != "token"} for d in self._devices.values()]
+        # never expose secrets on the public device list
+        return [{k: v for k, v in d.items() if k not in ("token", "access_code")}
+                for d in self._devices.values()]
 
     def _pick_online_token(self, token: str | None) -> str:
         if token:
@@ -134,9 +162,14 @@ class ControlHub:
                     "os": first.get("os", "?"),
                     "distro": first.get("distro"),
                     "paired_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+                    # the device's own passcode — delivered to the executor,
+                    # which DISPLAYS it on the controlled computer
+                    "access_code": "".join(secrets.choice(ALPHABET) for _ in range(6)),
                 }
                 self._save()
-                await ws.send_text(json.dumps({"type": "paired", "token": token}))
+                await ws.send_text(json.dumps({
+                    "type": "paired", "token": token,
+                    "access_code": self._devices[token]["access_code"]}))
                 print(f"[hub] paired new device: {self._devices[token]['name']} "
                       f"({self._devices[token]['os']})", flush=True)
             elif kind == "hello":
@@ -144,7 +177,14 @@ class ControlHub:
                 if token not in self._devices:
                     await ws.send_text(json.dumps({"type": "error", "error": "unknown token"}))
                     return
-                await ws.send_text(json.dumps({"type": "ready"}))
+                # devices paired before per-device passcodes get one now
+                if not self._devices[token].get("access_code"):
+                    self._devices[token]["access_code"] = \
+                        "".join(secrets.choice(ALPHABET) for _ in range(6))
+                    self._save()
+                await ws.send_text(json.dumps({
+                    "type": "ready",
+                    "access_code": self._devices[token]["access_code"]}))
             else:
                 await ws.send_text(json.dumps({"type": "error", "error": "expected pair or hello"}))
                 return

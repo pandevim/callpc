@@ -36,6 +36,24 @@ struct Conf {
     // (the website's auto-configure sets this on first pair).
     #[serde(default)]
     url: Option<String>,
+    // THIS computer's passcode, assigned by the server at pair time. We are
+    // the one place it's shown (TeamViewer model: seeing this screen proves
+    // you may control it). Never served by the loopback beacon — any local
+    // webpage could read that.
+    #[serde(default)]
+    access_code: Option<String>,
+}
+
+/// The banner is the user-facing source of the passcode — keep it loud.
+fn print_passcode(code: &str) {
+    let l1 = format!("PASSCODE for this computer:  {code}");
+    let l2 = "enter it on the callpc page to chat or call";
+    let w = l1.chars().count().max(l2.len());
+    let bar: String = "─".repeat(w + 4);
+    println!("  ┌{bar}┐");
+    println!("  │  {l1}{}  │", " ".repeat(w - l1.chars().count()));
+    println!("  │  {l2}{}  │", " ".repeat(w - l2.len()));
+    println!("  └{bar}┘");
 }
 
 fn conf_path() -> PathBuf {
@@ -134,22 +152,34 @@ async fn run(
         Some(Ok(Message::Text(t))) => serde_json::from_str(&t)?,
         other => bail!("no reply to pair/hello: {other:?}"),
     };
+    // the server assigns this computer's passcode on pair (and re-sends it on
+    // every hello, so devices paired before the feature pick theirs up too)
+    let access_code = reply.get("access_code").and_then(Value::as_str).map(String::from);
     match reply.get("type").and_then(Value::as_str) {
         Some("paired") => {
             conf.token = reply.get("token").and_then(Value::as_str).map(String::from);
             conf.url = Some(url.to_string()); // remember where to reconnect, no args next time
+            conf.access_code = access_code;
             save_conf(&conf)?;
             println!("[exec] paired! token stored in {}", conf_path().display());
         }
         Some("ready") => {
-            if conf.url.as_deref() != Some(url) {
+            if conf.url.as_deref() != Some(url)
+                || (access_code.is_some() && conf.access_code != access_code)
+            {
                 conf.url = Some(url.to_string());
+                if access_code.is_some() {
+                    conf.access_code = access_code;
+                }
                 save_conf(&conf)?;
             }
         }
         _ => bail!("rejected: {reply}"),
     }
     println!("[exec] online as {name} ({}, {w}x{h}) — waiting for requests", os_name());
+    if let Some(code) = conf.access_code.as_deref() {
+        print_passcode(code);
+    }
     online.store(true, Ordering::Relaxed); // beacon now reports a live connection
 
     let mut rate = RateLimit { window: Vec::new() };

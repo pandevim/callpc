@@ -49,7 +49,6 @@ import tasks.runner as task_runner         # noqa: E402
 import stt_nemotron                        # noqa: E402  (shared ASR engine)
 import onnx_engine                         # noqa: E402  (on path via stt_nemotron)
 
-ACCESS_CODE = os.environ.get("ACCESS_CODE", "").strip()
 STT_LANG = os.environ.get("STT_LANG", "en-US")
 BRAIN_BASE_URL = os.environ.get("BRAIN_BASE_URL", "http://127.0.0.1:8001/v1")
 BRAIN_MODEL = os.environ.get("BRAIN_MODEL", "brain")
@@ -367,7 +366,8 @@ router = APIRouter()
 @router.websocket("/api/chat/ws")
 async def chat_ws(ws: WebSocket):
     await ws.accept()
-    if ACCESS_CODE and ws.query_params.get("code", "") != ACCESS_CODE:
+    # per-device passcode (shown by the executor) or the operator master key
+    if not hub.code_ok(ws.query_params.get("code", "")):
         await ws.close(code=4401)   # the page shows the passcode prompt on this
         return
     chat.sockets.add(ws)

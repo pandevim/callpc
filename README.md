@@ -37,8 +37,10 @@ runs on a server; the only thing installed on the controlled machine is a tiny
    **outbound only**, so nothing is exposed on the controlled machine.
 
 The voice loop has real **barge-in** (interrupt the bot mid-sentence) and the call
-page is **push-to-talk** by default. A **shared passcode** gates every action so
-not just anyone with the URL can call or drive a paired computer.
+page is **push-to-talk** by default. Every action is gated by a **per-device
+passcode that the executor displays on the controlled computer** (TeamViewer
+model: seeing that screen proves you may control it) — not just anyone with the
+URL can call or drive a paired computer.
 
 Once a computer is connected, the web page is a **WhatsApp-style chat** with it
 (the call button sits top-right): type or **hold the mic to send a voice note**
@@ -109,9 +111,8 @@ sbatch deploy/prefetch_weights.sbatch    # UI-TARS, Qwen, Kyutai TTS + voices
 
 # put your session env in one file
 cat > ~/.callpc.env <<'ENV'
-# optional — leave ACCESS_CODE out and the server generates a passcode on
-# first start, prints it in the startup banner next to the URL, and keeps it
-# stable across restarts (server/.state/access_code). ACCESS_CODE=none disables.
+# optional operator master key — normal users never need it: each computer's
+# passcode is shown by the executor running on it. ACCESS_CODE=none disables.
 export ACCESS_CODE=<choose-a-passcode>
 export NGROK_AUTHTOKEN=<your-token>
 export NGROK_DOMAIN=<your>.ngrok-free.dev      # bare hostname
@@ -164,7 +165,8 @@ it"**, plus a *"Set up a different computer →"* link to pair another machine.
 
 ### 3. Call in
 
-Open `https://<your-url>` on your phone (keep it on speaker), enter the passcode,
+Open `https://<your-url>` on your phone (keep it on speaker), enter the passcode
+shown by the executor on the controlled computer,
 tap the green button, **hold to talk**, and say something — *"open Firefox and
 search for trains to Boston."* Watch it happen; hear it narrate.
 
@@ -179,10 +181,13 @@ search for trains to Boston."* Watch it happen; hear it narrate.
 
 ## Security note
 
-This is a **research prototype**, not hardened for hostile exposure. The passcode
-is a single shared secret over ngrok's TLS — it stops "anyone with the URL" but is
-not multi-user auth. The executor can control your real machine; only pair machines
-you own, and use the panic path (kill the executor process) to stop a session.
+This is a **research prototype**, not hardened for hostile exposure. Each device's
+passcode is generated at pair time and displayed only by the executor on that
+computer (plus an optional operator master key via `ACCESS_CODE`); it travels over
+ngrok's TLS but this is still not full multi-user auth. Pairing itself is open —
+it only offers up the machine the binary runs on. The executor can control your
+real machine; only pair machines you own, and use the panic path (kill the
+executor process) to stop a session.
 Per-device tokens, signing/notarization, and an always-on host are tracked in
 PLAN.md Phase 4.
 

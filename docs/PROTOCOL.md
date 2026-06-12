@@ -14,7 +14,9 @@ screenshot.
 
 1. The user gets a 6-char pairing code from the server:
    `POST /api/pair/new` → `{"code": "AB3K9Q", "expires_in": 600}`
-   (later: the "Connect this computer" page calls this and shows the code).
+   (the landing page calls this and shows the code). This endpoint is OPEN —
+   pairing offers up your *own* computer; it grants no control over anyone
+   else's. Control is gated by the per-device passcode below.
 2. The executor connects and sends:
    ```json
    {"type": "pair", "code": "AB3K9Q", "name": "<hostname>", "os": "windows|macos|linux",
@@ -23,9 +25,16 @@ screenshot.
    (`distro` is a human-readable OS string, mainly to show which Linux distro the
    controlled machine is; `/api/devices` surfaces it to the landing page.)
 3. Server validates the code (single-use, TTL 600 s) and replies:
-   `{"type": "paired", "token": "<long-lived device token>"}`
+   `{"type": "paired", "token": "<long-lived device token>", "access_code": "XK4M2P"}`
    then treats the connection as online (no separate hello needed).
    Invalid/expired code → `{"type": "error", "error": "bad pair code"}` + close.
+
+`access_code` is THIS device's passcode (TeamViewer model): the executor
+persists it and **displays it on the controlled computer** — the only place
+it's shown. Anyone wanting to call/chat/drive the computer must type it on
+the web page. It is never served by `/api/devices` or the loopback beacon
+(any local webpage could read that origin). The operator may additionally
+set `ACCESS_CODE` on the gateway as a master key.
 
 The executor persists the token locally and never pairs again.
 
@@ -34,8 +43,11 @@ The executor persists the token locally and never pairs again.
 ```json
 -> {"type": "hello", "token": "...", "name": "<hostname>", "os": "...",
     "distro": "...", "screen_w": 2560, "screen_h": 1440}
-<- {"type": "ready"}                       (or {"type":"error",...} + close)
+<- {"type": "ready", "access_code": "XK4M2P"}   (or {"type":"error",...} + close)
 ```
+
+`ready` re-sends the device passcode so executors paired before the feature
+(or after a wiped config) pick theirs up and display it.
 
 ## Local presence beacon (executor → loopback HTTP, not the gateway)
 
@@ -102,7 +114,8 @@ Keepalive (either direction): `{"type":"ping"}` → `{"type":"pong"}`.
 ## Chat channel (webapp ⇄ gateway, `/api/chat/ws`)
 
 Separate from the control channel above: this is the *user-facing* WhatsApp-style
-thread served by `gateway/chat.py`. Auth is the shared passcode as a query param
+thread served by `gateway/chat.py`. Auth is the device passcode (or the
+operator master key) as a query param
 (`/api/chat/ws?code=...`; HTTP middleware can't see WebSockets) — a wrong code
 closes the socket with **4401** and the page shows the passcode prompt. All open
 sockets share one conversation; the last ~150 items are replayed on connect as
