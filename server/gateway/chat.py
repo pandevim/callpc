@@ -148,6 +148,10 @@ class ChatHub:
         self._lock = asyncio.Lock()            # one brain turn at a time
         self._client = None
         self._status = ""                      # last status-bubble text
+        self._notes: list[str] = []            # task milestones the brain hasn't
+                                               # seen yet (folded into the next
+                                               # user turn — Qwen3.5's template
+                                               # 400s on mid-convo system msgs)
 
     def client(self):
         if self._client is None:
@@ -236,6 +240,12 @@ class ChatHub:
 
     async def _think(self, user_text: str):
         async with self._lock:
+            if self._notes:
+                # ground truth about runner activity, inlined so the message
+                # list stays template-legal (system only at the very start)
+                user_text = ("[context — task updates the user already saw in "
+                             "the chat: " + "; ".join(self._notes) + "]\n" + user_text)
+                self._notes = []
             self.messages.append({"role": "user", "content": user_text})
             self._trim_ctx()
             await self.set_status("thinking…")
@@ -342,10 +352,11 @@ class ChatHub:
             caption = {"finished": "how it ended up", "stuck": "where I'm stuck",
                        "failed": "the screen when it failed"}.get(kind, "")
             await self.broadcast({"type": "image", "b64": png_b64, "caption": caption})
-        # ground truth for later turns (the brain never saw the runner act)
-        self.messages.append({"role": "system",
-                              "content": f"[task update] {kind}: {text} — the user already "
-                                         "saw this and a screenshot in the chat"})
+        # ground truth for later turns (the brain never saw the runner act).
+        # NOT appended as a system message — Qwen3.5's chat template rejects
+        # system messages that aren't at the beginning ("System message must
+        # be at the beginning", HTTP 400) and would poison every later turn.
+        self._notes = self._notes[-4:] + [f"{kind}: {text}"]
 
 
 chat = ChatHub()
