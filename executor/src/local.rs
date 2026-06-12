@@ -157,13 +157,13 @@ async fn handle(
         let parsed: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
         let url = parsed.get("url").and_then(Value::as_str).unwrap_or("");
         let code = parsed.get("code").and_then(Value::as_str).unwrap_or("");
-        let already_paired = crate::load_conf().token.is_some();
-        let body = if already_paired {
-            // never let a loopback page re-target an already-paired agent
-            json!({"ok": false, "error": "already paired"}).to_string()
-        } else if url.is_empty() || code.is_empty() {
-            json!({"ok": false, "error": "url and code required"}).to_string()
+        let body = if state.configured.load(Ordering::Relaxed) {
+            // already have a gateway target — never let a loopback page re-target us
+            json!({"ok": false, "error": "already configured"}).to_string()
+        } else if url.is_empty() {
+            json!({"ok": false, "error": "url required"}).to_string()
         } else {
+            // code may be empty if we're already paired (a stored token is reused)
             state.configured.store(true, Ordering::Relaxed);
             let _ = state.cfg_tx.send((url.to_string(), code.to_string()));
             println!("[exec] configured by local page -> {url}");

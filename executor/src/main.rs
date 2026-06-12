@@ -278,7 +278,10 @@ async fn main() -> Result<()> {
 
     // local presence beacon (loopback only) + the auto-configure channel
     let online = Arc::new(AtomicBool::new(false));
-    let configured = Arc::new(AtomicBool::new(conf.token.is_some()));
+    // "configured" == we know a gateway URL to connect to (from args/env/conf).
+    // The website auto-configures us only when this is false; the agent accepts
+    // /configure only while this is false (so a paired agent can't be re-targeted).
+    let configured = Arc::new(AtomicBool::new(url.is_some()));
     let distro = local::distro();
     let (cfg_tx, mut cfg_rx) = tokio::sync::mpsc::unbounded_channel::<(String, String)>();
     tokio::spawn(local::serve(
@@ -295,12 +298,12 @@ async fn main() -> Result<()> {
 
     let mut backoff = 2u64;
     loop {
-        // Nothing to connect with (no url, never paired) -> wait for the website
-        // to POST /configure to the beacon, which arrives on cfg_rx.
-        if url.is_none() && load_conf().token.is_none() {
+        // No gateway URL known (fresh, or a token from an older build that didn't
+        // persist the URL) -> wait for the website to POST /configure.
+        if url.is_none() {
             println!("[exec] waiting to be configured — open callpc in a browser on this computer");
             match cfg_rx.recv().await {
-                Some((u, c)) => { url = Some(u); code = Some(c); }
+                Some((u, c)) => { url = Some(u); code = Some(c); configured.store(true, Ordering::Relaxed); }
                 None => return Ok(()), // beacon gone; nothing more to do
             }
         }

@@ -137,7 +137,10 @@ async function detectContext() {
 let autoTried = false;
 async function maybeAutoConfigure() {
   const l = ctx.local;
-  if (!l || l.online || l.paired) { autoTried = false; return; }  // nothing to do
+  // a local agent with no gateway target yet (fresh, or upgraded from a build
+  // that didn't persist the URL) — hand it one. `configured` covers both the
+  // unpaired and the paired-but-no-URL cases.
+  if (!l || l.online || l.configured) { autoTried = false; return; }
   if (autoTried) return;                                          // already sent this round
   try {
     const r = await fetch(API_BASE + "/api/pair/new", { method: "POST", headers: codeHeaders() });
