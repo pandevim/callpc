@@ -32,9 +32,13 @@ from ui_tars.action_parser import add_box_token, parse_action_to_structure_outpu
 
 UITARS_BASE_URL = os.environ.get("UITARS_BASE_URL", "http://127.0.0.1:8000/v1")
 UITARS_MODEL = os.environ.get("UITARS_MODEL", "ui-tars")
-MAX_PIXELS = int(os.environ.get("UITARS_MAX_PIXELS", str(1920 * 1080)))
+# A 1080p desktop screenshot is ~2700 vision tokens (factor-28 smart_resize), so
+# two of them already blew past UI-TARS's 8k serving context. Cap to 720p-equiv
+# (~1200 tokens/image): 4-image history + prompt ≈ 6k, comfortably under 8192.
+# Plenty of resolution for UI targeting; raise if you also raise UITARS_MAXLEN.
+MAX_PIXELS = int(os.environ.get("UITARS_MAX_PIXELS", str(1280 * 720)))
 MIN_PIXELS = 100 * 28 * 28
-HISTORY_N = int(os.environ.get("UITARS_HISTORY_N", "5"))
+HISTORY_N = int(os.environ.get("UITARS_HISTORY_N", "4"))
 LANGUAGE = os.environ.get("UITARS_LANGUAGE", "English")
 
 # OSWorld uitars15_v1 qwen25vl_normal prompt, verbatim (language param ours).

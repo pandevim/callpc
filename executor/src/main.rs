@@ -14,6 +14,8 @@
 
 mod input;
 mod screen;
+#[cfg(target_os = "linux")]
+mod uinput;
 
 use anyhow::{anyhow, bail, Context, Result};
 use base64::prelude::*;
@@ -230,7 +232,8 @@ async fn main() -> Result<()> {
     // rustls 0.23 no longer auto-selects a crypto backend (panics otherwise).
     let _ = rustls::crypto::ring::default_provider().install_default();
 
-    let input = input::InputThread::spawn();
+    let (sw, sh) = screen::size().unwrap_or((1920, 1080));
+    let input = input::InputThread::spawn(sw, sh);
     let mut backoff = 2u64;
     loop {
         match run(&url, code.as_deref(), &input).await {

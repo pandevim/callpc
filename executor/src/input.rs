@@ -17,9 +17,29 @@ pub struct InputThread {
 }
 
 impl InputThread {
-    pub fn spawn() -> Self {
+    /// screen_w/h feed the Linux uinput backend's absolute pointer.
+    pub fn spawn(screen_w: u32, screen_h: u32) -> Self {
         let (tx, rx) = mpsc::channel::<(String, Value, oneshot::Sender<Result<(), String>>)>();
         thread::spawn(move || {
+            // Linux: prefer uinput (kernel evdev — works on Wayland, where
+            // enigo/XTEST silently does nothing). Fall back to enigo only if
+            // /dev/uinput isn't writable.
+            #[cfg(target_os = "linux")]
+            {
+                match crate::uinput::Uinput::new(screen_w, screen_h) {
+                    Ok(u) => {
+                        println!("[exec] input backend: uinput (kernel evdev)");
+                        while let Ok((kind, args, reply)) = rx.recv() {
+                            let _ = reply.send(u.execute(&kind, &args).map_err(|e| e.to_string()));
+                        }
+                        return;
+                    }
+                    Err(e) => eprintln!(
+                        "[exec] uinput unavailable ({e:#}); falling back to enigo \
+                         (X11 only — a no-op on Wayland)"),
+                }
+            }
+            let _ = (screen_w, screen_h); // used only by the linux branch
             // catch_unwind: some enigo backends panic on init (e.g. a denied
             // Wayland portal) instead of returning Err — don't take the
             // process down, fail every action with a clear message instead.
@@ -27,7 +47,7 @@ impl InputThread {
                 .unwrap_or_else(|_| Err(enigo::NewConError::EstablishCon(
                     "input backend panicked on init")));
             let mut enigo = match enigo {
-                Ok(e) => e,
+                Ok(e) => { println!("[exec] input backend: enigo"); e }
                 Err(e) => {
                     eprintln!("[exec] FATAL: input backend init failed: {e}");
                     // drain and fail every request so the server sees errors
