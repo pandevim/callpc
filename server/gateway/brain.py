@@ -21,6 +21,10 @@ from pipecat.services.llm_service import FunctionCallParams
 from control.hub import hub
 from tasks.runner import runner
 
+BRAIN_BASE_URL = os.environ.get("BRAIN_BASE_URL", "http://127.0.0.1:8001/v1")
+BRAIN_MODEL = os.environ.get("BRAIN_MODEL", "brain")
+BRAIN_API_KEY = os.environ.get("BRAIN_API_KEY", "x")
+
 PERSONA = os.environ.get("PERSONA", (
     "You are callpc, a friendly assistant the user reached by phoning their computer. "
     "You are speaking out loud: keep replies to one or two short, natural sentences — "
@@ -35,7 +39,10 @@ PERSONA = os.environ.get("PERSONA", (
     "computer_task instead.\n\n"
     "computer_task takes ONE self-contained instruction, e.g. 'Open Firefox and search "
     "for tickets to Boston'. Answer ordinary questions (not about the computer) yourself "
-    "without the tool. While a task runs, progress is narrated to the user automatically "
+    "without the tool. If the user asks what's on the screen, what's open or running, or "
+    "what's going on on the computer, call look_at_screen with their question and tell "
+    "them what it returns — NEVER use computer_task just to inspect, and never guess. "
+    "While a task runs, progress is narrated to the user automatically "
     "— don't invent progress; use task_status if they ask how it's going, cancel_task if "
     "they say stop. For destructive or irreversible actions — deleting, sending messages, "
     "payments — say what you'll do and get a clear yes before calling computer_task. If "
@@ -59,6 +66,19 @@ def build_tools() -> ToolsSchema:
                 },
             },
             required=["instruction"],
+        ),
+        FunctionSchema(
+            name="look_at_screen",
+            description=("Look at the computer's screen right now and describe it. Use "
+                         "for any question about what's open, running, or visible — it "
+                         "does not click or change anything."),
+            properties={
+                "question": {
+                    "type": "string",
+                    "description": "What the user wants to know about the screen.",
+                },
+            },
+            required=[],
         ),
         FunctionSchema(
             name="task_status",
@@ -96,6 +116,57 @@ async def _computer_task(params: FunctionCallParams):
     })
 
 
+_VISION = None  # lazy AsyncOpenAI client for one-shot screen description
+
+
+async def _look_at_screen(params: FunctionCallParams):
+    """Voice-call eyes: screenshot -> one-shot vision call against the same
+    Qwen vLLM -> short spoken-style description returned to the call brain.
+    The raw screenshot also lands in the chat, as the call's paper trail."""
+    question = str(params.arguments.get("question", "") or "what is on the screen")
+    if not hub.online():
+        await params.result_callback(
+            {"error": "no computer is connected — the user needs to pair one first"})
+        return
+    try:
+        shot = await hub.screenshot()
+    except Exception as e:  # noqa: BLE001
+        await params.result_callback({"error": f"couldn't capture the screen: {e}"})
+        return
+    import chat as chat_mod  # imported lazily: brain is imported before chat in app.py
+    try:
+        await chat_mod.chat.broadcast({"type": "image", "b64": shot["png_b64"],
+                                       "caption": "current screen (asked on the call)"})
+    except Exception:  # noqa: BLE001 — chat mirror is best-effort
+        pass
+    global _VISION
+    if _VISION is None:
+        from openai import AsyncOpenAI
+        _VISION = AsyncOpenAI(base_url=BRAIN_BASE_URL, api_key=BRAIN_API_KEY)
+    try:
+        b64 = chat_mod._shrink_for_brain(shot["png_b64"])
+        resp = await _VISION.chat.completions.create(
+            model=BRAIN_MODEL,
+            messages=[{"role": "user", "content": [
+                {"type": "text", "text":
+                    "This is the user's computer screen. Answer for speech (two or "
+                    "three short plain sentences, no lists): " + question},
+                {"type": "image_url",
+                 "image_url": {"url": "data:image/jpeg;base64," + b64}},
+            ]}],
+            extra_body={"chat_template_kwargs": {"enable_thinking": False}},
+            max_tokens=200,
+        )
+        desc = (resp.choices[0].message.content or "").strip()
+    except Exception as e:  # noqa: BLE001
+        await params.result_callback({"error": f"couldn't analyze the screen: {e}"})
+        return
+    await params.result_callback({
+        "screen_description": desc,
+        "note": "a screenshot was also posted into the user's chat thread",
+    })
+
+
 async def _task_status(params: FunctionCallParams):
     st = runner.status()
     last = st["steps"][-1] if st["steps"] else None
@@ -113,5 +184,6 @@ async def _cancel_task(params: FunctionCallParams):
 
 def register_handlers(llm):
     llm.register_function("computer_task", _computer_task)
+    llm.register_function("look_at_screen", _look_at_screen)
     llm.register_function("task_status", _task_status)
     llm.register_function("cancel_task", _cancel_task)

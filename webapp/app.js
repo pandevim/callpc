@@ -88,9 +88,6 @@ function pcComplete() {
 const screens = {
   setup: $("screen-setup"),
   chat: $("screen-chat"),
-  ringing: $("screen-ringing"),
-  call: $("screen-call"),
-  ended: $("screen-ended"),
 };
 
 let pc = null;          // RTCPeerConnection
@@ -99,12 +96,11 @@ let sendStream = null;  // mic -> gain -> destination; what we actually send
 let micGain = null;     // mic gating = gain 0/1 (NOT track.enabled=false: that
                         // thins the RTP flow and the server's idle watcher kills
                         // the receiver — unmute after ~10 s went silent until redial)
-let handsFree = false;  // mic locked open (quick tap on the pill toggles it)
-let pttLive = false;    // true while the pill is held (push-to-talk)
+let muted = false;      // ChatGPT-voice-style: mic open by default, one mute toggle
+                        // (server-side VAD + barge-in handle the turn-taking)
 let timerStart = 0;
 let timerHandle = null;
 let talkingHandle = null;
-let micVizHandle = null;
 let ringHandle = null;
 let ringGain = null;    // master gain for ringback; zeroed to stop instantly
 let audioCtx = null;    // one shared AudioContext (created on the call gesture)
@@ -119,7 +115,15 @@ function show(name) {
   for (const [k, el] of Object.entries(screens)) el.classList.toggle("active", k === name);
 }
 
-function setRingStatus(msg) { $("ring-status").textContent = msg; }
+// the slim in-chat call strip: "ringing" | "live" | null (hidden)
+function callBar(state) {
+  const bar = $("call-bar");
+  if (!state) { bar.style.display = "none"; bar.classList.remove("talking"); return; }
+  bar.style.display = "";
+  $("cb-status").style.display = state === "ringing" ? "" : "none";
+  $("cb-timer").style.display = state === "live" ? "" : "none";
+  $("btn-mute").style.display = state === "live" ? "" : "none";
+}
 
 // ====================================================================
 //  Device-aware landing
@@ -340,7 +344,7 @@ function startTimer() {
   timerStart = Date.now();
   const tick = () => {
     const s = Math.floor((Date.now() - timerStart) / 1000);
-    $("timer").textContent =
+    $("cb-timer").textContent =
       String(Math.floor(s / 60)).padStart(2, "0") + ":" + String(s % 60).padStart(2, "0");
   };
   tick();
@@ -392,7 +396,7 @@ function stopRingtone() {
   }
 }
 
-// ---------- "bot is talking" avatar glow (driven by remote audio level) ----------
+// ---------- "bot is talking" glow on the call bar (remote audio level) ----------
 function watchRemoteAudio(stream) {
   try {
     const c = actx();
@@ -404,32 +408,8 @@ function watchRemoteAudio(stream) {
     talkingHandle = setInterval(() => {
       analyser.getByteFrequencyData(buf);
       const level = buf.reduce((a, b) => a + b, 0) / buf.length;
-      $("call-avatar").classList.toggle("talking", level > 8);
+      $("call-bar").classList.toggle("talking", level > 8);
     }, 150);
-  } catch (_) { /* visual nicety only */ }
-}
-
-// ---------- caller mic meter (you talking / stopped; flat while muted) ----------
-function watchMicAudio(stream) {
-  try {
-    const c = actx();
-    const src = c.createMediaStreamSource(stream);
-    const analyser = c.createAnalyser();
-    analyser.fftSize = 256;
-    src.connect(analyser);
-    const buf = new Uint8Array(analyser.frequencyBinCount);
-    const bars = document.querySelectorAll("#mic-viz i");
-    const seg = Math.floor(buf.length / 2 / bars.length);  // voice lives in the lower half
-    micVizHandle = setInterval(() => {
-      analyser.getByteFrequencyData(buf);
-      bars.forEach((bar, i) => {
-        let sum = 0;
-        for (let j = i * seg; j < (i + 1) * seg; j++) sum += buf[j];
-        const v = Math.min(1, sum / seg / 150);
-        bar.style.transform = `scaleY(${Math.max(0.15, v)})`;
-        bar.style.opacity = v > 0.1 ? "0.95" : "0.3";
-      });
-    }, 90);
   } catch (_) { /* visual nicety only */ }
 }
 
@@ -455,10 +435,11 @@ async function probeAuth() {
   if (authRequired && !getStoredCode()) pcShow(false);
 }
 
-// ---------- call lifecycle ----------
+// ---------- call lifecycle (lives in the chat's call bar) ----------
 async function startCall() {
-  show("ringing");
-  setRingStatus("requesting microphone…");
+  if (pc) return;  // already calling
+  callBar("ringing");
+  $("cb-status").textContent = "requesting microphone…";
   try {
     micStream = await navigator.mediaDevices.getUserMedia({
       // explicit AEC/NS: on speakerphone the bot otherwise hears itself and
@@ -467,10 +448,10 @@ async function startCall() {
       video: false,
     });
   } catch (e) {
-    return endCall("Microphone blocked", "Allow mic access and try again.");
+    return endCall("microphone blocked", "allow mic access and try again");
   }
 
-  setRingStatus("calling…");
+  $("cb-status").textContent = "calling…";
   startRingtone();  // the call tap is the user gesture WebAudio needs
   try {
     const c = actx();
@@ -491,13 +472,12 @@ async function startCall() {
       if (!pc) return;
       if (pc.connectionState === "connected") {
         stopRingtone();
-        show("call");
+        callBar("live");
         startTimer();
-        applyMicState();  // PTT default: mic gated closed until held
-        if (sendStream) watchMicAudio(sendStream);  // post-gain: bars follow the gate
+        setMuted(false);  // open mic; the server's VAD + barge-in do the turn-taking
       } else if (["failed", "disconnected", "closed"].includes(pc.connectionState)) {
-        if (screens.call.classList.contains("active") || screens.ringing.classList.contains("active")) {
-          endCall("Call ended", pc.connectionState === "failed" ? "connection failed" : "");
+        if ($("call-bar").style.display !== "none") {
+          endCall("call ended", pc.connectionState === "failed" ? "connection failed" : "");
         }
       }
     };
@@ -512,19 +492,19 @@ async function startCall() {
       });
     });
 
-    setRingStatus("ringing…");
+    $("cb-status").textContent = "ringing…";
     const r = await fetch(API_BASE + "/api/offer", {
       method: "POST",
       headers: { "Content-Type": "application/json", ...codeHeaders() },
       body: JSON.stringify({ sdp: pc.localDescription.sdp, type: pc.localDescription.type }),
     });
-    if (r.status === 401) return endCall("Wrong passcode", "Check the passcode and try again.");
-    if (!r.ok) return endCall("Couldn't reach your computer", `gateway answered HTTP ${r.status}`);
+    if (r.status === 401) { endCall("wrong passcode", ""); needPasscode(); return; }
+    if (!r.ok) return endCall("couldn't reach your computer", `gateway answered HTTP ${r.status}`);
     await pc.setRemoteDescription(await r.json());
-    // connectionstatechange flips to the in-call screen when media lands
+    // connectionstatechange flips the bar to "live" when media lands
   } catch (e) {
     console.error(e);
-    endCall("Couldn't reach your computer", e.message);
+    endCall("couldn't reach your computer", e.message);
   }
 }
 
@@ -533,61 +513,32 @@ function teardown() {
   stopRingtone();
   clearInterval(talkingHandle);
   talkingHandle = null;
-  clearInterval(micVizHandle);
-  micVizHandle = null;
   if (pc) { try { pc.close(); } catch (_) {} pc = null; }
   if (micStream) { micStream.getTracks().forEach((t) => t.stop()); micStream = null; }
   sendStream = null;
   micGain = null;
-  pttLive = false;  // mode itself persists across calls
+  muted = false;
 }
 
+// the call ends back into the chat: hide the bar, leave a small trace bubble
 function endCall(title, detail) {
   teardown();
-  $("ended-title").textContent = title || "Call ended";
-  $("ended-detail").textContent = detail || "";
-  show("ended");
+  callBar(null);
+  addInfo("📞 " + title + (detail ? " — " + detail : ""));
 }
 
-// back to the device-aware landing (re-detects connection state)
-function backToSetup() {
-  teardown();
-  show("setup");
-  startDetectLoop();
-}
-
-// ---------- mic gating: ONE pill — hold to talk, quick tap locks hands-free ----------
-function applyMicState() {
-  const live = handsFree || pttLive;
+// ---------- mute toggle (the only in-call mic control) ----------
+function setMuted(m) {
+  muted = m;
   if (micGain) {
     // quick fade avoids a click; the stream keeps flowing (silence) so the
     // server-side receiver never idles out
-    micGain.gain.setTargetAtTime(live ? 1 : 0, actx().currentTime, 0.02);
+    micGain.gain.setTargetAtTime(m ? 0 : 1, actx().currentTime, 0.02);
   }
-  const b = $("btn-ptt");
-  b.classList.toggle("live", live);
-  b.textContent = handsFree ? "🎙 mic open — tap to mute"
-                : pttLive   ? "talking…"
-                            : "hold to talk · tap for hands-free";
+  $("ic-unmuted").style.display = m ? "none" : "";
+  $("ic-muted").style.display = m ? "" : "none";
+  $("btn-mute").classList.toggle("engaged", m);
 }
-
-const _ptt = $("btn-ptt");
-let pttDownAt = 0;
-_ptt.addEventListener("pointerdown", (e) => {
-  e.preventDefault();
-  try { _ptt.setPointerCapture(e.pointerId); } catch (_) {}
-  pttDownAt = Date.now();
-  if (!handsFree) { pttLive = true; applyMicState(); }
-});
-for (const ev of ["pointerup", "pointercancel"]) {
-  _ptt.addEventListener(ev, () => {
-    const tap = Date.now() - pttDownAt < 250;   // quick tap = toggle hands-free
-    pttLive = false;
-    if (tap) handsFree = !handsFree;
-    applyMicState();
-  });
-}
-_ptt.addEventListener("contextmenu", (e) => e.preventDefault());  // mobile long-press
 
 // ====================================================================
 //  Chat — WhatsApp-style messaging with the computer (/api/chat/ws)
@@ -897,10 +848,8 @@ $("btn-send").onclick = sendChatText;
 $("chat-input").addEventListener("input", updateComposer);
 $("chat-input").addEventListener("keydown", (e) => { if (e.key === "Enter") sendChatText(); });
 
-$("btn-again").onclick = startCall;
-$("btn-ended-chat").onclick = backToSetup;  // re-detects -> lands back in the chat
-$("btn-cancel").onclick = backToSetup;
-$("btn-hangup").onclick = backToSetup;
+$("btn-mute").onclick = () => setMuted(!muted);
+$("btn-cb-hangup").onclick = () => endCall("call ended", "");
 
-probeAuth();        // reveal the passcode field if the gateway requires one
+probeAuth();        // reveal the passcode boxes if the gateway requires one
 startDetectLoop();  // device-aware landing
