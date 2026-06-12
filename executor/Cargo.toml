@@ -1,6 +1,6 @@
 [package]
 name = "callpc-executor"
-version = "0.3.0"
+version = "0.3.1"
 edition = "2021"
 description = "callpc executor — dumb I/O stub for the controlled computer (docs/PROTOCOL.md)"
 license = "MIT"
@@ -30,6 +30,13 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 # Linux: capture via xdg-desktop-portal Screenshot (GNOME/KDE Wayland block
 # xcap's old org.gnome.Shell.Screenshot path; the portal prompts once then
 # remembers). tokio feature to match our runtime (not the default async-std).
+# Windows: declare per-monitor-v2 DPI awareness at startup. Without it,
+# Windows virtualizes our coordinates on scaled displays (125-150% is the
+# laptop default) while xcap screenshots stay physical pixels — every click
+# would land offset by the scale factor.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_UI_HiDpi", "Win32_Foundation"] }
+
 [target.'cfg(target_os = "linux")'.dependencies]
 ashpd = { version = "0.9", default-features = false, features = ["tokio"] }
 url = "2"

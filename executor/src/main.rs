@@ -259,6 +259,20 @@ fn merge(into: &mut Value, from: &Value) {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Windows: per-monitor-v2 DPI awareness, BEFORE any screen-size query.
+    // Otherwise Windows hands us virtualized coordinates on scaled displays
+    // while screenshots stay physical pixels — clicks land offset by the
+    // scale factor. (Needs Win10 1703+; on failure we just warn.)
+    #[cfg(windows)]
+    unsafe {
+        use windows_sys::Win32::UI::HiDpi::{
+            SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
+        };
+        if SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) == 0 {
+            eprintln!("[exec] couldn't set DPI awareness — clicks may be offset on scaled displays");
+        }
+    }
+
     // URL resolution: --url > CALLPC_URL env > persisted conf.url > none.
     // With none (and no stored token) the agent idles and waits for the website
     // to auto-configure it via the local beacon — "download, run, done".
