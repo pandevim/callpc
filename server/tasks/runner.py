@@ -191,13 +191,25 @@ class TaskRunner:
 
     async def _run(self, instruction: str):
         last_png = None
+        # Ground UI-TARS in the actual machine — hotkeys and app names differ
+        # by OS ("Task Manager" on a GNOME desktop sent it window-hunting;
+        # macOS wants cmd, not ctrl). Goes into the OSWorld prompt's
+        # "User Instruction" section, which is plain natural language.
+        env = ""
+        try:
+            d = hub.online()[0]
+            osname = d.get("distro") or d.get("os")
+            if osname:
+                env = f" (The computer is {osname}.)"
+        except (IndexError, KeyError):
+            pass
         try:
             for n in range(1, MAX_STEPS + 1):
                 shot = await hub.screenshot()
                 last_png = shot["png_b64"]
                 screen_w, screen_h = shot["w"], shot["h"]
                 text, actions, sent_b64, _, _ = await self.client.predict(
-                    instruction, self._turns, shot["png_b64"])
+                    instruction + env, self._turns, shot["png_b64"])
 
                 step = {
                     "n": n,
