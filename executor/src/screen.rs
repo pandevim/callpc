@@ -20,18 +20,46 @@ pub fn size() -> Result<(u32, u32)> {
     Ok((m.width(), m.height()))
 }
 
-/// PNG screenshot of the primary monitor -> (png_bytes, width, height).
-///
-/// GNOME/KDE Wayland gate screen capture behind an interactive xdg-desktop-
-/// portal grant — the first call pops an "Allow screen sharing?" dialog the
-/// user must approve (a background/headless process can't, so it returns
-/// "Screenshot failed or canceled"). X11/XWayland and a plain Xorg session
-/// capture with no prompt. This is the documented Wayland friction (PLAN.md).
+/// Linux: capture via xdg-desktop-portal Screenshot. GNOME/KDE block xcap's
+/// org.gnome.Shell.Screenshot path outright (no prompt, just "failed or
+/// canceled"); the portal is the supported route — it shows a one-time
+/// permission prompt, then remembers the grant. Returns PNG bytes the portal
+/// already wrote. Works on X11 too (no prompt there).
+#[cfg(target_os = "linux")]
+pub async fn capture_portal() -> Result<(Vec<u8>, u32, u32)> {
+    use ashpd::desktop::screenshot::Screenshot;
+
+    let response = Screenshot::request()
+        .interactive(false) // grab the whole screen; don't make the user pick a region
+        .modal(false)
+        .send()
+        .await
+        .context("portal screenshot request")?
+        .response()
+        .context("portal screenshot denied or cancelled")?;
+
+    let path = url::Url::parse(response.uri().as_str())
+        .ok()
+        .and_then(|u| u.to_file_path().ok())
+        .ok_or_else(|| anyhow!("portal returned a non-file uri: {}", response.uri()))?;
+    let bytes = std::fs::read(&path).context("reading portal screenshot file")?;
+    let img = image::load_from_memory(&bytes).context("decoding portal screenshot")?;
+    let (w, h) = (img.width(), img.height());
+    // portal writes PNG already, but re-encode defensively so the server always
+    // gets PNG regardless of the portal backend's chosen format.
+    let mut out = Vec::new();
+    img.write_to(&mut Cursor::new(&mut out), image::ImageFormat::Png)
+        .context("re-encoding portal screenshot")?;
+    let _ = std::fs::remove_file(&path); // the portal file is ours to clean up
+    Ok((out, w, h))
+}
+
+/// PNG screenshot via xcap (DXGI / CoreGraphics / X11). The Linux path prefers
+/// `capture_portal` (above); this is the Windows/macOS path and the Linux-X11
+/// fallback.
 pub fn capture() -> Result<(Vec<u8>, u32, u32)> {
     let m = primary()?;
-    let img = m.capture_image().context(
-        "capturing screen (on GNOME/KDE Wayland, approve the screen-share \
-         portal prompt, or use an Xorg session)")?;
+    let img = m.capture_image().context("capturing screen")?;
     let (w, h) = (img.width(), img.height());
     let mut buf = Vec::new();
     image::DynamicImage::ImageRgba8(img)

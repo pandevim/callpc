@@ -145,7 +145,7 @@ async fn run(url: &str, code: Option<&str>, input: &input::InputThread) -> Resul
         let id = m.get("id").cloned().unwrap_or(Value::Null);
         match m.get("type").and_then(Value::as_str) {
             Some("screenshot_request") => {
-                let reply = match tokio::task::spawn_blocking(screen::capture).await? {
+                let reply = match capture_any().await {
                     Ok((png, w, h)) => {
                         println!("[exec] screenshot -> {} bytes", png.len());
                         json!({"type": "screenshot", "id": id,
@@ -181,6 +181,19 @@ async fn run(url: &str, code: Option<&str>, input: &input::InputThread) -> Resul
         }
     }
     Ok(())
+}
+
+/// Screenshot, preferring the xdg-desktop-portal on Linux (the only path GNOME/
+/// KDE Wayland allow) and falling back to xcap (X11/Win/Mac, and Linux-X11).
+async fn capture_any() -> Result<(Vec<u8>, u32, u32)> {
+    #[cfg(target_os = "linux")]
+    {
+        match screen::capture_portal().await {
+            Ok(r) => return Ok(r),
+            Err(e) => eprintln!("[exec] portal screenshot failed ({e:#}); trying xcap"),
+        }
+    }
+    tokio::task::spawn_blocking(screen::capture).await?
 }
 
 fn merge(into: &mut Value, from: &Value) {
