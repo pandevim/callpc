@@ -555,7 +555,6 @@ let chatAuthFailed = false;  // last connect was rejected (4401) — stop the
                              // setup->chat redirect loop until the code changes
 let statusBub = null;        // the single in-place progress bubble
 let pendingVoice = null;     // my just-sent voice bubble, awaiting its transcript
-let localStatus = "";        // client-only status (e.g. quick screenshot fetch)
 
 function enterChat() {
   if (!screens.chat.classList.contains("active")) show("chat");
@@ -614,9 +613,8 @@ function handleChat(m) {
     scrollChat(true);
     return;
   }
-  if (m.type === "status") { localStatus = ""; setStatusBubble(m.text || ""); return; }
+  if (m.type === "status") { setStatusBubble(m.text || ""); return; }
   if (m.type === "error") { addInfo("⚠️ " + m.text); return; }
-  if (m.type === "image" && localStatus) { localStatus = ""; setStatusBubble(""); }
   renderItem(m);
 }
 
@@ -855,12 +853,6 @@ $("btn-chat-menu").onclick = () => { forceInstall = true; show("setup"); renderS
 $("btn-send").onclick = sendChatText;
 $("chat-input").addEventListener("input", updateComposer);
 $("chat-input").addEventListener("keydown", (e) => { if (e.key === "Enter") sendChatText(); });
-$("btn-shot").onclick = () => {                    // quick action: no LLM round-trip
-  if (!chatReady()) return;
-  chatWS.send(JSON.stringify({ type: "screenshot" }));
-  localStatus = "fetching a screenshot…";
-  setStatusBubble(localStatus);
-};
 
 $("btn-again").onclick = startCall;
 $("btn-ended-chat").onclick = backToSetup;  // re-detects -> lands back in the chat

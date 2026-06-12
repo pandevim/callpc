@@ -67,16 +67,21 @@ CHAT_PERSONA = os.environ.get("CHAT_PERSONA", (
     "type, browse, or look at the screen by yourself. NEVER say you are doing "
     "something, that it's done, or describe the screen unless you called the matching "
     "tool in the same turn.\n\n"
+    "READ vs DO: if the user asks what's on the screen, what's open or running, or "
+    "anything else you could answer by LOOKING — call take_screenshot; the image "
+    "comes back to you, so answer from what you actually see. computer_task is "
+    "STRICTLY for changing things (open, click, type, browse), never for "
+    "inspecting.\n\n"
     "computer_task takes ONE self-contained instruction, e.g. 'Open Firefox and "
-    "search for tickets to Boston'. While it runs, the chat automatically shows the "
-    "user live progress, and when it finishes, gets stuck, or fails the chat posts a "
-    "message plus a screenshot by itself — so after starting a task just acknowledge "
-    "briefly and do NOT invent or repeat progress. Use task_status if asked how it's "
-    "going, cancel_task to stop it. When the user asks to see the screen, call "
-    "take_screenshot — the image is posted into the chat for you. For destructive or "
-    "irreversible actions (deleting, sending messages, payments) get a clear yes "
-    "first. Voice notes arrive as transcribed text. If no computer is connected, say "
-    "so plainly."
+    "search for tickets to Boston'. Match it to the connected computer's actual OS "
+    "(a Linux desktop has no 'Task Manager'; don't assume Windows concepts). While "
+    "it runs, the chat automatically shows the user live progress, and when it "
+    "finishes, gets stuck, or fails the chat posts a message plus a screenshot by "
+    "itself — so after starting a task just acknowledge briefly and do NOT invent "
+    "or repeat progress. Use task_status if asked how it's going, cancel_task to "
+    "stop it. For destructive or irreversible actions (deleting, sending messages, "
+    "payments) get a clear yes first. Voice notes arrive as transcribed text. If no "
+    "computer is connected, say so plainly."
 ))
 
 TOOLS = [
@@ -139,6 +144,18 @@ def _transcribe(pcm: np.ndarray) -> str:
     return onnx_engine._LANG_TAG.sub("", text or "").strip()
 
 
+def _shrink_for_brain(png_b64: str) -> str:
+    """Downscale a screenshot for the brain's context: one ≤1024px JPEG is
+    ~700 image tokens of the 8k window — a single 'glance'. This is NOT the
+    task loop's 720p × 4-frame stream; continuous seeing stays UI-TARS-only."""
+    from PIL import Image
+    img = Image.open(io.BytesIO(base64.b64decode(png_b64)))
+    img.thumbnail((1024, 1024))
+    buf = io.BytesIO()
+    img.convert("RGB").save(buf, "JPEG", quality=80)
+    return base64.b64encode(buf.getvalue()).decode()
+
+
 class ChatHub:
     def __init__(self):
         self.sockets: set[WebSocket] = set()
@@ -151,6 +168,11 @@ class ChatHub:
                                                # seen yet (folded into the next
                                                # user turn — Qwen3.5's template
                                                # 400s on mid-convo system msgs)
+        self._pending_image = None             # screenshot to attach AFTER the
+                                               # tool results (a user msg between
+                                               # tool_calls and tool would break
+                                               # the chat template)
+        self._dev_note = ""                    # last "connected computer: ..." note
 
     def client(self):
         if self._client is None:
@@ -239,6 +261,16 @@ class ChatHub:
 
     async def _think(self, user_text: str):
         async with self._lock:
+            # tell the brain WHICH computer it's driving (name + distro) the
+            # first time and whenever it changes — "Open Task Manager" on a
+            # GNOME desktop came from not knowing the OS
+            dev = (hub.online() or [None])[0]
+            label = (f"connected computer: {dev.get('name')} "
+                     f"({dev.get('distro') or dev.get('os')})"
+                     if dev else "no computer connected right now")
+            if label != self._dev_note:
+                self._dev_note = label
+                self._notes.append(label)
             if self._notes:
                 # ground truth about runner activity, inlined so the message
                 # list stays template-legal (system only at the very start)
@@ -283,6 +315,9 @@ class ChatHub:
                     result = await self._tool(tc.function.name, args)
                     self.messages.append({"role": "tool", "tool_call_id": tc.id,
                                           "content": json.dumps(result)})
+                if self._pending_image:   # screenshot -> the brain's own eyes
+                    self._attach_image(self._pending_image)
+                    self._pending_image = None
                 continue
             text = (m.content or "").strip()
             if text:
@@ -313,8 +348,11 @@ class ChatHub:
                 return {"error": str(e)}
             await self.broadcast({"type": "image", "b64": shot["png_b64"],
                                   "caption": "current screen"})
-            return {"status": "sent",
-                    "note": "the screenshot is now visible in the chat — refer to it briefly"}
+            self._pending_image = shot["png_b64"]
+            return {"status": "captured",
+                    "note": ("the screenshot follows as an image in this conversation "
+                             "(the user sees it in the chat too) — answer from what "
+                             "you actually see in it")}
         if name == "task_status":
             st = runner.status()
             last = st["steps"][-1] if st["steps"] else None
@@ -324,6 +362,25 @@ class ChatHub:
         if name == "cancel_task":
             return await runner.cancel()
         return {"error": f"unknown tool {name!r}"}
+
+    def _attach_image(self, png_b64: str):
+        """Put the captured screen into the brain's own context (Qwen3.5-9B is
+        a vision model). Exactly ONE image lives in the conversation: vLLM's
+        default per-prompt image limit is 1, and each costs ~700 of the 8k
+        tokens — older ones collapse to a text placeholder."""
+        for m in self.messages:
+            if isinstance(m.get("content"), list):
+                m["content"] = "[an earlier screenshot was attached here]"
+        try:
+            b64 = _shrink_for_brain(png_b64)
+        except Exception as e:  # noqa: BLE001 — a blind answer beats a dead turn
+            print(f"[chat] screenshot shrink failed: {type(e).__name__}: {e}", flush=True)
+            return
+        self.messages.append({"role": "user", "content": [
+            {"type": "text", "text": "[automatic: the screenshot you just captured]"},
+            {"type": "image_url",
+             "image_url": {"url": "data:image/jpeg;base64," + b64}},
+        ]})
 
     def _trim_ctx(self):
         """Bound the brain context. Cut only at a user-message boundary so an

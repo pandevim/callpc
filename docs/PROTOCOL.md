@@ -142,6 +142,12 @@ messages (+ a fresh screenshot) land only on milestones — finished, stuck
 started from a voice call report into the chat too. Voice notes are decoded
 with PyAV and transcribed by the same Nemotron engine (`OnnxASR.transcribe`).
 
+When the brain calls its `take_screenshot` tool, the image goes two ways: into
+the chat for the user AND into the brain's own context (downscaled ≤1024px
+JPEG ≈ 700 tokens; only the newest one is kept) — so "what's open / what's on
+my screen" is answered by *looking*, never by dispatching a `computer_task`.
+The high-rate 720p × 4-frame screenshot stream remains UI-TARS-only.
+
 ## Safety (executor side, per PLAN.md)
 
 Panic key kills the session; max-actions-per-minute rate limit; visible
