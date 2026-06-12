@@ -94,6 +94,8 @@ body {
 .dark.engaged svg { fill: #15192b; }
 
 .hint { color: #93a0b8; font-size: .85rem; }
+.connect-link { color: #6b7896; font-size: .85rem; text-decoration: none; margin-top: 22px; }
+.connect-link:hover { color: #93a0b8; }
 
 /* ---------- push-to-talk ---------- */
 .ptt {
