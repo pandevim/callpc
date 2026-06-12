@@ -22,6 +22,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from pipecat.audio.vad.silero import SileroVADAnalyzer
+from pipecat.audio.vad.vad_analyzer import VADParams
 from pipecat.frames.frames import (
     Frame,
     InterimTranscriptionFrame,
@@ -34,7 +35,14 @@ from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineParams, PipelineTask
 from pipecat.processors.aggregators.llm_context import LLMContext
-from pipecat.processors.aggregators.llm_response_universal import LLMContextAggregatorPair
+from pipecat.processors.aggregators.llm_response_universal import (
+    LLMContextAggregatorPair,
+    LLMUserAggregatorParams,
+)
+from pipecat.turns.user_turn_strategies import UserTurnStrategies
+from pipecat.turns.user_stop.speech_timeout_user_turn_stop_strategy import (
+    SpeechTimeoutUserTurnStopStrategy,
+)
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from pipecat.services.openai.llm import OpenAILLMService
 from pipecat.transports.base_transport import TransportParams
@@ -163,7 +171,22 @@ async def _run_bot(connection: SmallWebRTCConnection):
     brain.register_handlers(llm)  # computer_task / task_status / cancel_task
     context = LLMContext(messages=[{"role": "system", "content": brain.PERSONA}],
                          tools=brain.build_tools())
-    agg = LLMContextAggregatorPair(context)
+    # Turn-taking (Pipecat 1.3): VAD + turn config lives on the aggregator, NOT
+    # the transport (TransportParams silently drops vad_analyzer). The DEFAULT
+    # stop strategy is the Smart Turn v3 model, which ended turns mid-sentence —
+    # it split short spoken commands ("open the calculator" -> "open the" /
+    # "calculator"). Replace it with plain VAD-silence endpointing and a patient
+    # 1.2 s stop (default 0.2 s) so a pause mid-command doesn't cut the user off
+    # — much better for push-to-talk, where the release is the real end-of-turn.
+    agg = LLMContextAggregatorPair(
+        context,
+        user_params=LLMUserAggregatorParams(
+            vad_analyzer=SileroVADAnalyzer(params=VADParams(stop_secs=1.2)),
+            user_turn_strategies=UserTurnStrategies(
+                stop=[SpeechTimeoutUserTurnStopStrategy(user_speech_timeout=0.8)],
+            ),
+        ),
+    )
 
     # caller mic -> STT -> (log) -> user-context -> brain -> (log) -> TTS -> out
     # -> assistant-context. allow_interruptions=True + the interruptible TTS
