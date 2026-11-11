@@ -8,7 +8,7 @@ runs on a server; the only thing installed on the controlled machine is a tiny
 
 > Status: **working end-to-end** — call from a phone → say *"open the calculator"*
 > → it opens on the real machine and tells you it's done. Built as a research
-> prototype on a university HPC (single L40S GPU). See [PLAN.md](PLAN.md) for the
+> prototype on a SLURM GPU cluster (single L40S GPU). See [PLAN.md](PLAN.md) for the
 > full design, decisions, and phase-by-phase build log.
 
 ---

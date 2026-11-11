@@ -114,7 +114,7 @@ Note: a pure-browser executor (WASM) is impossible — browsers cannot synthesiz
 
 ## Server environment (SLURM / HPC cluster — the real L40S host)
 
-The L40S is reached through a **SLURM batch cluster** (university HPC), not a persistent always-on box. This is the single biggest deployment constraint. Key facts:
+The L40S is reached through a **SLURM batch cluster**, not a persistent always-on box. This is the single biggest deployment constraint. Key facts:
 
 - **Scheduler:** SLURM. Workflow: `git clone` on the login node → put secrets in encrypted `.env` → `sbatch`. Partition: **`gpu-l40s` (48 GB)** — the only GPU we have access to. Request `--gres=gpu:1 --cpus-per-task=… --time=24:00:00`. **~24 h max wall time** — everything in the job dies at the limit; resubmit. No persistent daemon; always-on is out of scope.
 - **Container runtime = Apptainer (Singularity), not bare pip.** This is the cluster-blessed way to run as non-root and dodge `$HOME` cache-quota limits. Run vLLM straight from the official image: `apptainer run --nv docker://vllm/vllm-openai:latest --model … --port …`. Run moshi (TTS) from a tiny custom image built once from a `.def` (pytorch base + git, then `pip install git+…/moshi` at launch). `--nv` for GPU, `--fakeroot` to build, `--bind` for caches. Build/cache the `.sif` once in the submit dir; subsequent jobs skip the build. Avoid a shared-FS pip venv (concurrent installs race and corrupt it).
@@ -139,7 +139,7 @@ The L40S is reached through a **SLURM batch cluster** (university HPC), not a pe
 
 **Phase 4 — polish:** call UI sounds/animations, auth hardening (per-device tokens), transcript + screenshot-trail logging for every task, executor login-launch toggle, macOS notarization + Windows code-signing, and (if moving off the cluster) a persistent always-on host so calls don't need a live sbatch job + tunnel.
 
-## Build status (updated 2026-06-11, Stevens `jarvis` HPC)
+## Build status (updated 2026-06-11)
 
 **Done & verified on the real L40S:**
 
@@ -162,7 +162,7 @@ The L40S is reached through a **SLURM batch cluster** (university HPC), not a pe
 - **Brain model: `Qwen/Qwen3.5-9B` + `--quantization fp8`** — no official 9B FP8 repo exists, and Qwen3 dropped the `-Instruct` suffix. It's a **hybrid GDN (mamba) + vision** model, so it needs more non-weight VRAM than a plain dense 9B → run at `--gpu-memory-utilization 0.32 --max-model-len 8192`. **Thinking mode OFF** (`chat_template_kwargs.enable_thinking=false`) — on by default it dumps the whole CoT (~90 s); off gives crisp 1–2 sentence replies. Needs vLLM ≥0.17 (GDN arch). UI-TARS runs at `0.50 / 16384`.
 - **vLLM image entrypoint is `vllm serve`** — pass the model as a positional arg (`--model` deprecated); JSON flags like `--limit-mm-per-prompt` get quote-mangled through `apptainer run` (use dot-syntax or set per-request).
 - **WebRTC media needs TURN** — the cluster NAT blocks direct/STUN media (signaling alone works through the tunnel). Env `TURN_URL/USER/PASS` (free metered.ca) wired into both browser + aiortc.
-- **Reachability for dev:** SSH tunnel `jarvis -f -N -L <port>:<node>:<port>` + open `http://localhost:<port>` (localhost = secure context for the mic); ngrok only needed to call from a phone.
+- **Reachability for dev:** SSH tunnel `<login-host> -f -N -L <port>:<node>:<port>` + open `http://localhost:<port>` (localhost = secure context for the mic); ngrok only needed to call from a phone.
 - **Pipecat 1.3** specifics: gateway uses the universal `LLMContext` + `LLMContextAggregatorPair` (not the removed `OpenAILLMContext`); image needs `opencv-python-headless` (not full opencv), `onnxruntime-gpu` forced over the CPU build that `pipecat[silero]` pulls, and NLTK `punkt_tab` baked in (read-only container fs).
 
 ## Verification

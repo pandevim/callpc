@@ -1,6 +1,5 @@
 #!/bin/bash
 #SBATCH --job-name=callpc-build-images
-#SBATCH --partition=compute-hf
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
@@ -14,15 +13,16 @@
 # pulls/builds at runtime (concurrent pulls on a shared FS corrupt the cache).
 #
 # Run it on a COMPUTE node, NOT the login node (the SIF pack is CPU/IO-heavy and
-# login nodes forbid it). No GPU needed — pick a CPU partition. Two ways:
+# login nodes forbid it). No GPU needed — pick a CPU partition (your cluster's
+# default is used unless you pass --partition). Two ways:
 #
 #   mkdir -p logs                       # once: SLURM needs logs/ to exist
 #   sbatch deploy/build_images.sbatch       # preferred — logs to logs/build_<jobid>.out
-#       # override the partition if compute-hf is busy:
-#       sbatch --partition=compute-short deploy/build_images.sbatch
+#       # or pick a partition:
+#       sbatch --partition=<cpu-partition> deploy/build_images.sbatch
 #
 #   # or interactively:
-#   srun --partition=compute-hf --cpus-per-task=8 --mem=64G --time=00:40:00 --pty bash
+#   srun --partition=<cpu-partition> --cpus-per-task=8 --mem=64G --time=00:40:00 --pty bash
 #   cd ~/projects/callpc/server && ./deploy/build_images.sbatch
 #
 # Set HF_TOKEN first if you also want gated weights later (UI-TARS is Apache,
